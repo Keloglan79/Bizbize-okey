@@ -1161,62 +1161,80 @@ function mpAct(act, extra) {
   log("Hamle masaya gitti.");
 }
 function mpGuest() { return mp.role === "guest"; }
-const rtc = { peers: {}, stream: null, talker: null };
+const rtc = { peers: {}, stream: null, remote: {}, ice: {}, talker: null };
+const ICE = { iceServers: [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:openrelay.metered.ca:80" },
+  { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
+] };
 function seatBox(abs) {
   const view = (abs - (mp.abs || 0) + 4) % 4;
-  return document.querySelector('#seat' + view + ' .avatar');
+  return document.querySelector("#seat" + view + " .avatar");
 }
 async function ensureMedia() {
   if (rtc.stream) return rtc.stream;
   rtc.stream = await navigator.mediaDevices.getUserMedia({
     audio: true,
-    video: { width: 854, height: 480, facingMode: "user" }
+    video: { width: { ideal: 854 }, height: { ideal: 480 }, facingMode: "user" }
   });
   rtc.stream.getAudioTracks().forEach(tr => tr.enabled = false);
   return rtc.stream;
 }
 function showStream(abs, stream) {
+  if (stream) rtc.remote[abs] = stream;
   const box = seatBox(abs);
-  if (!box) return;
+  if (!box || !rtc.remote[abs]) return;
   let video = box.querySelector("video");
   if (!video) { video = document.createElement("video"); video.autoplay = true; video.playsInline = true; box.appendChild(video); }
-  video.srcObject = stream;
+  if (video.srcObject !== rtc.remote[abs]) video.srcObject = rtc.remote[abs];
   video.muted = abs === mp.abs;
   box.classList.add("live");
+  video.play().catch(() => {});
+}
+function restickStreams() {
+  Object.keys(rtc.remote).forEach(seat => showStream(Number(seat), rtc.remote[seat]));
+}
+async function flushIce(pc, seat) {
+  const queued = rtc.ice[seat] || [];
+  rtc.ice[seat] = [];
+  for (const c of queued) await pc.addIceCandidate(c).catch(() => {});
 }
 async function connectPeer(seat) {
-  if (seat === mp.abs || rtc.peers[seat]) return;
+  if (seat === mp.abs || rtc.peers[seat]) return rtc.peers[seat];
   await ensureMedia();
-  const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  const pc = new RTCPeerConnection(ICE);
   rtc.stream.getTracks().forEach(tr => pc.addTrack(tr, rtc.stream));
   pc.onicecandidate = (e) => { if (e.candidate) mpSend({ t: "signal", to: seat, data: { ice: e.candidate } }); };
-  pc.ontrack = (e) => showStream(seat, e.streams[0]);
+  pc.ontrack = (e) => showStream(seat, e.streams[0] || new MediaStream([e.track]));
   rtc.peers[seat] = pc;
   if (mp.abs < seat) {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     mpSend({ t: "signal", to: seat, data: { sdp: pc.localDescription } });
   }
+  return pc;
 }
 async function onSignal(msg) {
   await ensureMedia();
-  let pc = rtc.peers[msg.from];
-  if (!pc) await connectPeer(msg.from);
-  pc = rtc.peers[msg.from];
+  const pc = await connectPeer(msg.from);
   if (msg.data.sdp) {
     await pc.setRemoteDescription(msg.data.sdp);
+    await flushIce(pc, msg.from);
     if (msg.data.sdp.type === "offer") {
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       mpSend({ t: "signal", to: msg.from, data: { sdp: pc.localDescription } });
     }
   } else if (msg.data.ice) {
-    pc.addIceCandidate(msg.data.ice).catch(() => {});
+    if (!pc.remoteDescription) (rtc.ice[msg.from] = rtc.ice[msg.from] || []).push(msg.data.ice);
+    else pc.addIceCandidate(msg.data.ice).catch(() => {});
   }
 }
 function linkHumans() {
   (mp.players || []).forEach(p => { if (p.seat !== mp.abs) connectPeer(p.seat).catch(() => {}); });
-  if (rtc.stream) showStream(mp.abs, rtc.stream);
+  if (rtc.stream) { rtc.remote[mp.abs] = rtc.stream; restickStreams(); }
 }
 function setMic(on) {
   const btn = document.getElementById("micBtn");
@@ -1263,7 +1281,7 @@ document.getElementById("startGameBtn").onclick = () => {
   mpBroadcast();
 };
 const _render = render;
-render = function () { _render(); mpBroadcast(); if (rtc.stream) showStream(mp.abs, rtc.stream); };
+render = function () { _render(); mpBroadcast(); restickStreams(); };
 
 const micBtn = document.getElementById("micBtn");
 micBtn.addEventListener("pointerdown", async (e) => {
