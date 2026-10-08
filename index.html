@@ -382,6 +382,12 @@
       <input id="roomCode" placeholder="Oda kodu" style="width:100%;margin:8px 0;padding:12px;border-radius:12px;border:1px solid #c9ae8c">
       <p id="roomStatus"></p>
     </div>
+    <div id="lobby" hidden>
+      <p style="font-size:13px;letter-spacing:.14em;text-transform:uppercase">Masa kodu</p>
+      <p id="roomCodeBig" style="font-size:36px;font-weight:800;letter-spacing:.18em;margin:4px 0 12px">----</p>
+      <ul id="lobbyList" style="text-align:left;line-height:1.6"></ul>
+      <button type="button" id="startGameBtn" class="primary" disabled>Oyunu başlat</button>
+    </div>
   </div>
 </div>
 
@@ -958,7 +964,7 @@ function nextTurn() {
   state.phase = "draw";
   state.drawPick = { wall: false, seats: [], gosterge: false };
   render();
-  if (state.turn !== 0) setTimeout(aiTurn, 700);
+  if (state.turn !== 0 && !(state.onlineHumans || []).includes(state.turn)) setTimeout(aiTurn, 700);
   else log("Sıra sende. Desteye ya da soldaki taşa bas.");
 }
 
@@ -1091,20 +1097,29 @@ function mpConnect(done) {
   mp.ws.onmessage = (e) => mpOn(JSON.parse(e.data));
   mp.ws.onerror = () => { const s = document.getElementById("roomStatus"); if (s) s.textContent = "Sunucuya bağlanılamadı."; };
 }
+function renderLobby() {
+  const box = document.getElementById("lobby");
+  if (!box) return;
+  box.hidden = false;
+  document.getElementById("netBox").hidden = true;
+  document.getElementById("roomCodeBig").textContent = mp.code || "----";
+  document.getElementById("lobbyList").innerHTML = (mp.players || []).map(p => `<li>Koltuk ${p.seat + 1}: ${p.name}${p.seat === 0 ? " · kurucu" : ""}</li>`).join("") || "<li>Oyuncular bekleniyor.</li>";
+  const btn = document.getElementById("startGameBtn");
+  btn.disabled = mp.role !== "host";
+  btn.textContent = mp.role === "host" ? "Oyunu başlat" : "Kurucu başlatacak";
+}
 function mpOn(msg) {
   if (msg.t === "error") return document.getElementById("roomStatus").textContent = msg.text;
   if (msg.t === "room" || msg.t === "roster") {
     if (msg.code) mp.code = msg.code;
     if (msg.seat != null) mp.abs = msg.seat;
-    mp.role = msg.host ? "host" : mp.role;
-    const names = (msg.players || []).map(p => p.name).join(", ");
-    document.getElementById("roomStatus").textContent = "Oda " + mp.code + " · koltuk " + (mp.abs + 1) + (names ? " · " + names : "");
+    if (msg.players) mp.players = msg.players;
     if (msg.host) mp.role = "host";
     else if (msg.t === "room") mp.role = "guest";
+    renderLobby();
   }
   if (msg.t === "state" && mp.role === "guest") mpApply(msg.state, msg.names);
   if (msg.t === "act" && mp.role === "host") mpHostAct(msg.seat, msg.act, msg);
-  if (msg.t === "start" && mp.role === "guest") log("Masa açıldı.");
 }
 function mpSnapshot() {
   return JSON.parse(JSON.stringify({ scores: state.scores, round: state.round, dealer: state.dealer, players: state.players, wall: state.wall, discard: state.discard, discards: state.discards, indicator: state.indicator, okey: state.okey, turn: state.turn, phase: state.phase, starter: state.starter, mode: state.mode, amerikanEl: state.amerikanEl, opened: state.opened, melds: state.melds, ply: state.ply, gostergeLive: state.gostergeLive, drawPick: state.drawPick }));
@@ -1114,6 +1129,8 @@ function mpBroadcast() {
   mpSend({ t: "state", state: mpSnapshot(), names: NAMES });
 }
 function mpApply(snap, names) {
+  hideSteps();
+  state.started = true;
   const me = mp.abs;
   const rot = (arr) => arr.map((_, i) => arr[(i + me) % 4]);
   Object.assign(state, snap);
@@ -1144,8 +1161,32 @@ function mpHostAct(seat, act, msg) {
 }
 document.getElementById("localBtn").onclick = () => { mp.role = "local"; showModes(); };
 document.getElementById("onlineBtn").onclick = () => { mp.role = "online"; showModes(); };
-document.getElementById("hostBtn").onclick = () => mpConnect(() => { mp.role = "host"; mpSend({ t: "create", name: mp.hero || "Kurucu" }); seatTable(mp.hero); });
-document.getElementById("joinBtn").onclick = () => mpConnect(() => { mp.role = "guest"; mpSend({ t: "join", code: document.getElementById("roomCode").value.trim(), name: mp.hero || "Oyuncu" }); seatTable(mp.hero); });
+document.getElementById("hostBtn").onclick = () => mpConnect(() => { mp.role = "host"; mpSend({ t: "create", name: mp.hero || "Kurucu" }); });
+document.getElementById("joinBtn").onclick = () => {
+  const code = document.getElementById("roomCode").value.trim();
+  if (!code) return document.getElementById("roomStatus").textContent = "Önce masa kodunu yaz.";
+  mpConnect(() => { mp.role = "guest"; mpSend({ t: "join", code, name: mp.hero || "Oyuncu" }); });
+};
+document.getElementById("startGameBtn").onclick = () => {
+  if (mp.role !== "host") return;
+  const seated = mp.players || [];
+  const used = new Set(seated.map(p => p.name));
+  const bots = shuffle(CAST.map(c => c.name).filter(n => !used.has(n)));
+  const names = ["", "", "", ""];
+  seated.forEach(p => { names[p.seat] = p.name; });
+  let b = 0;
+  for (let i = 0; i < 4; i++) if (!names[i]) names[i] = bots[b++];
+  NAMES = names;
+  state.onlineHumans = seated.map(p => p.seat);
+  state.scores = state.mode === "duz" ? [20, 20, 20, 20] : [0, 0, 0, 0];
+  state.amerikanEl = 0;
+  state.dealer = 0;
+  state.round = 0;
+  state.started = true;
+  hideSteps();
+  newRound();
+  mpBroadcast();
+};
 const _render = render;
 render = function () { _render(); mpBroadcast(); };
 const _onStock = onStock;
