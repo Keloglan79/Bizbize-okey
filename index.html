@@ -81,10 +81,16 @@
   .seat-head { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 6px; }
   .side-left .seat-head, .side-right .seat-head { flex-direction: column; gap: 4px; }
   .seat.active .name { color: var(--gold); }
-  .avatar { width: 72px; height: 96px; border-radius: 12px; overflow: hidden; display: grid; place-items: center; font-weight: 800; color: #fff; border: 2px solid rgba(255,255,255,.7); font-size: 16px; background: #123; flex: none; }
+  .avatar { width: 92px; height: 122px; border-radius: 12px; overflow: hidden; display: grid; place-items: center; font-weight: 800; color: #fff; border: 2px solid rgba(255,255,255,.7); font-size: 16px; background: #123; flex: none; }
   .avatar.opened { border: 3px solid #ffe27a; box-shadow: 0 0 0 3px rgba(255,214,90,.35), 0 0 16px 4px rgba(255,214,90,.85); animation: shine 1.4s ease-in-out infinite; }
   @keyframes shine { 50% { box-shadow: 0 0 0 4px rgba(255,236,160,.7), 0 0 22px 6px rgba(255,214,90,1); } }
   .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .avatar video { width: 100%; height: 100%; object-fit: cover; display: none; }
+  .avatar.live video { display: block; }
+  .avatar.live img { display: none; }
+  button.mic { width: 46px; height: 34px; padding: 0; border-radius: 999px; font-size: 18px; }
+  button.mic.live { background: #d84a4a; color: white; }
+
   .seat .name { font-weight: 700; font-size: 14px; line-height: 1.15; text-align: center; }
   .seat .meta { font-size: 11px; opacity: .8; text-align: center; }
   .opp-rack {
@@ -211,7 +217,7 @@
     .discard-slot .tile { width: 28px; height: 38px; font-size: 16px; }
     .opp-rack { display: grid; width: 54px; height: 36px; padding: 3px; gap: 2px; }
     .side-left .opp-rack, .side-right .opp-rack { width: 36px; height: 54px; }
-    .avatar { width: 64px; height: 86px; border-radius: 10px; }
+    .avatar { width: 80px; height: 108px; border-radius: 10px; }
     .seat .name { font-size: 12px; }
     .seat .meta { font-size: 10px; }
     .seat-head { margin-bottom: 0; gap: 4px; }
@@ -336,6 +342,7 @@
           <button id="openBtn" class="primary">Aç</button>
           <button id="discardBtn" class="primary" disabled>At</button>
           <button id="finishBtn" class="danger" disabled>Bitir</button>
+          <button id="micBtn" class="mic" type="button" title="Basılı tut, konuş">🎤</button>
         </div>
       </div>
       <div id="rack"></div>
@@ -1120,6 +1127,9 @@ function mpOn(msg) {
   }
   if (msg.t === "state" && mp.role === "guest") mpApply(msg.state, msg.names);
   if (msg.t === "act" && mp.role === "host") mpHostAct(msg.seat, msg.act, msg);
+  if (msg.t === "signal") onSignal(msg);
+  if (msg.t === "talk") { rtc.talker = msg.talker; if (rtc.stream) rtc.stream.getAudioTracks().forEach(tr => tr.enabled = rtc.talker === mp.abs); setMic(rtc.talker === mp.abs); }
+  if (msg.t === "room" || msg.t === "roster") linkHumans();
 }
 function mpSnapshot() {
   return JSON.parse(JSON.stringify({ scores: state.scores, round: state.round, dealer: state.dealer, players: state.players, wall: state.wall, discard: state.discard, discards: state.discards, indicator: state.indicator, okey: state.okey, turn: state.turn, phase: state.phase, starter: state.starter, mode: state.mode, amerikanEl: state.amerikanEl, opened: state.opened, melds: state.melds, ply: state.ply, gostergeLive: state.gostergeLive, drawPick: state.drawPick }));
@@ -1151,6 +1161,71 @@ function mpAct(act, extra) {
   log("Hamle masaya gitti.");
 }
 function mpGuest() { return mp.role === "guest"; }
+const rtc = { peers: {}, stream: null, talker: null };
+function seatBox(abs) {
+  const view = (abs - (mp.abs || 0) + 4) % 4;
+  return document.querySelector('#seat' + view + ' .avatar');
+}
+async function ensureMedia() {
+  if (rtc.stream) return rtc.stream;
+  rtc.stream = await navigator.mediaDevices.getUserMedia({
+    audio: true,
+    video: { width: 854, height: 480, facingMode: "user" }
+  });
+  rtc.stream.getAudioTracks().forEach(tr => tr.enabled = false);
+  return rtc.stream;
+}
+function showStream(abs, stream) {
+  const box = seatBox(abs);
+  if (!box) return;
+  let video = box.querySelector("video");
+  if (!video) { video = document.createElement("video"); video.autoplay = true; video.playsInline = true; box.appendChild(video); }
+  video.srcObject = stream;
+  video.muted = abs === mp.abs;
+  box.classList.add("live");
+}
+async function connectPeer(seat) {
+  if (seat === mp.abs || rtc.peers[seat]) return;
+  await ensureMedia();
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  rtc.stream.getTracks().forEach(tr => pc.addTrack(tr, rtc.stream));
+  pc.onicecandidate = (e) => { if (e.candidate) mpSend({ t: "signal", to: seat, data: { ice: e.candidate } }); };
+  pc.ontrack = (e) => showStream(seat, e.streams[0]);
+  rtc.peers[seat] = pc;
+  if (mp.abs < seat) {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    mpSend({ t: "signal", to: seat, data: { sdp: pc.localDescription } });
+  }
+}
+async function onSignal(msg) {
+  await ensureMedia();
+  let pc = rtc.peers[msg.from];
+  if (!pc) await connectPeer(msg.from);
+  pc = rtc.peers[msg.from];
+  if (msg.data.sdp) {
+    await pc.setRemoteDescription(msg.data.sdp);
+    if (msg.data.sdp.type === "offer") {
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      mpSend({ t: "signal", to: msg.from, data: { sdp: pc.localDescription } });
+    }
+  } else if (msg.data.ice) {
+    pc.addIceCandidate(msg.data.ice).catch(() => {});
+  }
+}
+function linkHumans() {
+  (mp.players || []).forEach(p => { if (p.seat !== mp.abs) connectPeer(p.seat).catch(() => {}); });
+  if (rtc.stream) showStream(mp.abs, rtc.stream);
+}
+function setMic(on) {
+  const btn = document.getElementById("micBtn");
+  if (!btn) return;
+  const blocked = rtc.talker != null && rtc.talker !== mp.abs;
+  btn.disabled = blocked;
+  btn.classList.toggle("live", on && rtc.talker === mp.abs);
+}
+
 function mpHostAct(seat, act, msg) {
   if (state.turn !== seat) return;
   if (act === "stock") { if (state.wall.length) drawFromWall(seat); state.phase = "discard"; }
@@ -1188,7 +1263,17 @@ document.getElementById("startGameBtn").onclick = () => {
   mpBroadcast();
 };
 const _render = render;
-render = function () { _render(); mpBroadcast(); };
+render = function () { _render(); mpBroadcast(); if (rtc.stream) showStream(mp.abs, rtc.stream); };
+
+const micBtn = document.getElementById("micBtn");
+micBtn.addEventListener("pointerdown", async (e) => {
+  e.preventDefault();
+  if (mp.role === "local") return;
+  try { await ensureMedia(); } catch { return log("Kamera veya mikrofon izni yok."); }
+  mpSend({ t: "talk", on: true });
+});
+["pointerup","pointercancel","pointerleave"].forEach(ev => micBtn.addEventListener(ev, () => { if (mp.role !== "local") mpSend({ t: "talk", on: false }); }));
+
 const _onStock = onStock;
 onStock = function () { if (mpGuest()) return mpAct("stock"); return _onStock(); };
 const _onDiscardPile = onDiscardPile;

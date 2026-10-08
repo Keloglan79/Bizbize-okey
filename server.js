@@ -78,6 +78,23 @@ wss.on("connection", (ws) => {
       broadcast(room, msg, ws);
       if (msg.t !== "act") send(ws, msg);
     }
+    if (msg.t === "signal") {
+      const room = roomOf(ws.room);
+      if (!room) return;
+      const target = room.players.find(p => p.seat === msg.to);
+      if (target) send(target.ws, { t: "signal", from: ws.seat, data: msg.data });
+    }
+    if (msg.t === "talk") {
+      const room = roomOf(ws.room);
+      if (!room) return;
+      if (msg.on && room.talker != null && room.talker !== ws.seat) {
+        return send(ws, { t: "talk", ok: false, talker: room.talker });
+      }
+      room.talker = msg.on ? ws.seat : (room.talker === ws.seat ? null : room.talker);
+      const out = { t: "talk", seat: ws.seat, on: !!msg.on, talker: room.talker };
+      broadcast(room, out);
+      send(ws, out);
+    }
   });
   ws.on("close", () => {
     const room = roomOf(ws.room);
