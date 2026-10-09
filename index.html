@@ -663,19 +663,21 @@ function render() {
         el.onclick = (e) => {
           e.stopPropagation();
           if (state.phase === "over") return;
-          if (state.selected && state.selected !== tile.id) {
-            moveSelectedTo(idx);
+          if (state.mode !== "duz") {
+            const pi = state.picked.indexOf(tile.id);
+            if (pi >= 0) state.picked.splice(pi, 1);
+            else state.picked.push(tile.id);
+            state.selected = state.picked.length ? state.picked[state.picked.length - 1] : null;
+            render();
             return;
           }
           state.selected = state.selected === tile.id ? null : tile.id;
-          if (state.turn === 0 && state.mode !== "duz" && state.selected === tile.id && !state.picked.includes(tile.id)) state.picked.push(tile.id);
-          if (state.selected !== tile.id) state.picked = state.picked.filter(id => id !== tile.id);
           render();
         };
         slot.appendChild(el);
       }
       slot.onclick = () => {
-        if (state.selected) moveSelectedTo(idx);
+        if (state.selected && !state.slots[idx]) moveSelectedTo(idx);
       };
       slot.ondragover = (e) => e.preventDefault();
       slot.ondrop = (e) => {
@@ -684,14 +686,11 @@ function render() {
         if (!idNum) return;
         const from = state.slots.indexOf(idNum);
         const to = idx;
-        if (from === to) return;
-        const dest = state.slots[to];
+        if (from === to || state.slots[to]) return;
         state.slots[to] = idNum;
-        if (from >= 0) state.slots[from] = dest;
-        if (!dest) {
-          state.picked = state.picked.filter(id => id !== idNum);
-          if (state.selected === idNum) state.selected = null;
-        }
+        if (from >= 0) state.slots[from] = null;
+        state.picked = state.picked.filter(id => id !== idNum);
+        if (state.selected === idNum) state.selected = state.picked.at(-1) || null;
         render();
       };
       line.appendChild(slot);
@@ -1054,13 +1053,12 @@ function moveSelectedTo(idx) {
   if (!state.selected) return;
   const from = state.slots.indexOf(state.selected);
   if (from < 0 || from === idx) return;
-  const dest = state.slots[idx];
-  state.slots[idx] = state.selected;
-  state.slots[from] = dest;
-  if (!dest) {
-    state.picked = state.picked.filter(id => id !== state.selected);
-    state.selected = null;
-  }
+  if (state.slots[idx]) return;
+  const moving = state.selected;
+  state.slots[idx] = moving;
+  state.slots[from] = null;
+  state.picked = state.picked.filter(id => id !== moving);
+  state.selected = state.picked.at(-1) || null;
   render();
 }
 document.getElementById("stockPile").onclick = onStock;
