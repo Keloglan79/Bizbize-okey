@@ -87,6 +87,7 @@
   .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .avatar video { width: 100%; height: 100%; object-fit: cover; display: none; }
   .avatar.live video { display: block; }
+  #seat0 .avatar.live video { transform: scaleX(-1); }
   .avatar.live img { display: none; }
   button.mic { width: 46px; height: 34px; padding: 0; border-radius: 999px; font-size: 18px; }
   button.mic.live { background: #d84a4a; color: white; }
@@ -507,6 +508,7 @@ function newRound() {
   state.okey = { color: indicator.color, num: nextNum(indicator.num) };
   state.discard = [];
   state.discards = [[], [], [], []];
+  state.taken = [[], [], [], []];
   state.players = [[], [], [], []];
   state.opened = [false, false, false, false];
   state.melds = [];
@@ -522,7 +524,6 @@ function newRound() {
     state.ply = 0;
     state.turn = state.starter;
     state.phase = "draw";
-    sortHand(0, "color");
     rebuildSlots();
     log(NAMES[state.starter] + " başlıyor. Amerikano " + (state.amerikanEl + 1) + "/11: " + contract().name + ". Gösterge alınana kadar durur. İlk başlayan bedava alabilir.");
     render();
@@ -537,7 +538,6 @@ function newRound() {
   state.wall = deck;
   state.turn = state.starter;
   state.phase = "discard";
-  sortHand(0, "color");
   rebuildSlots();
   const gostergeHits = state.mode === "duz" ? applyGostergePenalty() : [];
   let msg = NAMES[state.starter] + " " + (handCount + 1) + " taşla açıyor. Okey: " + COLOR_NAME[state.okey.color] + " " + state.okey.num + ".";
@@ -662,20 +662,14 @@ function render() {
         };
         el.onclick = (e) => {
           e.stopPropagation();
-          if (state.phase === "over" || state.turn !== 0) return;
-          if (state.mode !== "duz") {
-            const pi = state.picked.indexOf(tile.id);
-            if (pi >= 0) state.picked.splice(pi, 1);
-            else state.picked.push(tile.id);
-            state.selected = state.picked.length === 1 ? state.picked[0] : null;
-            render();
-            return;
-          }
+          if (state.phase === "over") return;
           if (state.selected && state.selected !== tile.id) {
             moveSelectedTo(idx);
             return;
           }
           state.selected = state.selected === tile.id ? null : tile.id;
+          if (state.turn === 0 && state.mode !== "duz" && state.selected === tile.id && !state.picked.includes(tile.id)) state.picked.push(tile.id);
+          if (state.selected !== tile.id) state.picked = state.picked.filter(id => id !== tile.id);
           render();
         };
         slot.appendChild(el);
@@ -785,6 +779,8 @@ function takeFromPile(player, owner) {
   if (!pile || !pile.length) return null;
   const t = pile.pop();
   state.players[player].push(t);
+  state.taken = state.taken || [[], [], [], []];
+  state.taken[player].push(t);
   if (player === 0) placeOnRack(t);
   return t;
 }
@@ -1182,19 +1178,26 @@ async function ensureMedia() {
   rtc.stream.getAudioTracks().forEach(tr => tr.enabled = false);
   return rtc.stream;
 }
-function showStream(abs, stream) {
-  if (stream) rtc.remote[abs] = stream;
-  const box = seatBox(abs);
-  if (!box || !rtc.remote[abs]) return;
+function attachVideo(box, stream, muted) {
+  if (!box || !stream) return;
   let video = box.querySelector("video");
-  if (!video) { video = document.createElement("video"); video.autoplay = true; video.playsInline = true; box.appendChild(video); }
-  if (video.srcObject !== rtc.remote[abs]) video.srcObject = rtc.remote[abs];
-  video.muted = abs === mp.abs;
+  if (!video) { video = document.createElement("video"); video.autoplay = true; video.playsInline = true; video.setAttribute("playsinline", ""); box.appendChild(video); }
+  if (video.srcObject !== stream) video.srcObject = stream;
+  video.muted = muted;
   box.classList.add("live");
   video.play().catch(() => {});
 }
+function showStream(abs, stream) {
+  if (stream) rtc.remote[abs] = stream;
+  if (abs === mp.abs) return;
+  attachVideo(seatBox(abs), rtc.remote[abs], false);
+}
 function restickStreams() {
-  Object.keys(rtc.remote).forEach(seat => showStream(Number(seat), rtc.remote[seat]));
+  attachVideo(document.querySelector("#seat0 .avatar"), rtc.stream, true);
+  Object.keys(rtc.remote).forEach(seat => {
+    seat = Number(seat);
+    if (seat !== mp.abs) attachVideo(seatBox(seat), rtc.remote[seat], false);
+  });
 }
 async function flushIce(pc, seat) {
   const queued = rtc.ice[seat] || [];
@@ -2058,15 +2061,33 @@ function wantsDiscard(player, tile) {
   if (state.mode === "amerikan" && !state.opened[player] && tableRound() >= 1) return !!findContractGroups(hand.concat([tile]));
   return false;
 }
+function sameLine(a, b) {
+  if (!a || !b || a.joker || b.joker) return false;
+  if (a.num === b.num) return true;
+  return a.color === b.color && nearNum(a.num, b.num);
+}
+function discardRank(player, tile) {
+  const hand = state.players[player];
+  const f = faceOf(tile);
+  let keep = handUsefulness(hand, tile) * 10;
+  if (f.joker) keep += 500;
+  if (nextCanLayOff(player, tile) || canAddSomewhere(tile)) keep += 400;
+  const others = hand.filter(x => x.id !== tile.id).map(faceOf);
+  if (others.filter(x => !x.joker && x.num === f.num).length >= 2) keep += 80;
+  if (others.filter(x => !x.joker && x.color === f.color && nearNum(x.num, f.num)).length >= 2) keep += 80;
+  let sabotage = 0;
+  for (let i = 0; i < 4; i++) {
+    if (i === player) continue;
+    for (const d of state.discards[i] || []) if (sameLine(f, faceOf(d))) sabotage += 12;
+    for (const d of (state.taken && state.taken[i]) || []) if (sameLine(f, faceOf(d))) sabotage -= 18;
+  }
+  return keep - sabotage;
+}
 function chooseDiscard(player) {
   const hand = state.players[player];
-  const ranked = hand.slice().sort((a, b) => {
-    const ua = handUsefulness(hand, a), ub = handUsefulness(hand, b);
-    if (ua !== ub) return ua - ub;
-    return tilePoints(b) - tilePoints(a);
-  });
-  const safe = ranked.filter(t => !nextCanLayOff(player, t) && !canAddSomewhere(t));
-  const careful = ranked.filter(t => !nextCanLayOff(player, t));
+  const ranked = hand.slice().sort((a, b) => discardRank(player, a) - discardRank(player, b) || tilePoints(b) - tilePoints(a));
+  const safe = ranked.filter(t => !faceOf(t).joker && !nextCanLayOff(player, t) && !canAddSomewhere(t));
+  const careful = ranked.filter(t => !faceOf(t).joker && !nextCanLayOff(player, t));
   return (safe[0] || careful[0] || ranked[0]).id;
 }
 
