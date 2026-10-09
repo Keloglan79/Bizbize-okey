@@ -279,6 +279,8 @@
   }
   .modal h2 { margin: 0 0 8px; font-family: Georgia, serif; }
   .modal p, .modal li { font-size: 14px; line-height: 1.45; }
+  .score-list { margin: 6px 0 0; padding-left: 18px; }
+  .score-list li { font-weight: 700; }
   .win-grid { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; }
   .group { display: flex; gap: 4px; background: rgba(0,0,0,.2); padding: 6px; border-radius: 8px; }
   @media (max-width: 800px) {
@@ -983,7 +985,7 @@ function endEmpty() {
       notes.push(NAMES[i] + " +" + pen + (jokers ? " (joker)" : ""));
     }
     log("Deste bitti. El cezası: " + notes.join(", "));
-    showModal("Deste bitti", `<p>Bu el: ${notes.join(" · ")}</p><p>Toplam: ${NAMES.map((n,i)=>n+" "+state.scores[i]).join(" · ")}</p>`);
+    showModal("Deste bitti", `<p>Bu el: ${notes.join(" · ")}</p><p>Toplam</p>${totalListHtml()}`);
     render();
     return advanceAmerikan(false);
   }
@@ -1008,13 +1010,20 @@ function finishRound(winner, result) {
     <p>${NAMES[winner]}, ${kind} ile bitirdi ve ${loss} puan kaybetti.${mustafaExtra ? " Mustafa, başkası puan kaybettiği için 1 puan daha kaybetti." : ""}</p>
     <div class="win-grid">${groupsHtml}</div>
     <p>Bu el: ${NAMES[winner]} −${loss}</p>
-    <p>Toplam: ${NAMES.map((n,i)=>n+" "+state.scores[i]).join(" · ")}</p>
+    <p>Toplam</p>${totalListHtml()}
     ${finished ? "<p><strong>Bir puan 0 veya altına indi. Maç bitti. En düşük puan kazanır.</strong></p>" : "<p>Bunu kapatınca yeni el başlar.</p>"}
   `);
   render();
   state.dealer = (state.dealer + 1) % 4;
 }
 
+function totalListHtml() {
+  const rows = NAMES.map((n, i) => ({ n, s: state.scores[i] })).sort((a, b) => a.s - b.s);
+  return `<ol class="score-list">` + rows.map((r, i) => {
+    const color = i === 0 ? "#1f8a4c" : i === rows.length - 1 ? "#c0392b" : "#3a2418";
+    return `<li style="color:${color}">${r.n} ${r.s}</li>`;
+  }).join("") + `</ol>`;
+}
 function showModal(title, html) {
   document.getElementById("modalTitle").textContent = title;
   document.getElementById("modalBody").innerHTML = html;
@@ -1551,7 +1560,7 @@ function finishAmerikan(winner, result) {
     state.scores[i] += pen;
     notes.push(NAMES[i] + " +" + pen);
   }
-  showModal(contract().name + " bitti", `<p>Bu el (${state.amerikanEl + 1}/11): ${notes.join(" · ")}</p><p>Toplam: ${NAMES.map((n,i)=>n+" "+state.scores[i]).join(" · ")}</p>`);
+  showModal(contract().name + " bitti", `<p>Bu el (${state.amerikanEl + 1}/11): ${notes.join(" · ")}</p><p>Toplam</p>${totalListHtml()}`);
   render();
   state.dealer = (state.dealer + 1) % 4;
   advanceAmerikan(false);
