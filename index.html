@@ -658,7 +658,10 @@ function render() {
     }
     if (pile.length) spot.appendChild(tileEl(pile.at(-1)));
     else spot.insertAdjacentHTML("beforeend", `<div class="tile" style="opacity:.28">—</div>`);
-    disc.onclick = () => onDiscardPile(i);
+    disc.onclick = () => {
+      if (state.turn === 0 && state.phase === "discard" && state.selected && i === 0) return playerDiscard(false);
+      onDiscardPile(i);
+    };
   }
   const ind = document.getElementById("indicator");
   ind.innerHTML = "";
@@ -781,11 +784,12 @@ function render() {
         box.className = "meld";
         box.title = NAMES[m.owner] + " · eklemek için seç ve buraya bas";
         sortMeld(m.tiles); const stand = new Map(jokerStandIns(m.tiles).map(s => [s.joker, s])); m.tiles.forEach(tile => box.appendChild(tileEl(tile, { asNum: faceOf(tile).joker && stand.get(tile) ? stand.get(tile).num : null })));
-        box.onclick = () => addToMeld(mi);
+        box.onclick = (e) => { e.stopPropagation(); addToMeld(mi); };
         line.appendChild(box);
       });
       melds.appendChild(line);
     });
+    melds.onclick = () => openSelected();
   }
   const me = NAMES[0] || "Sen";
   document.getElementById("turnLabel").textContent = myTurn
@@ -884,6 +888,7 @@ function discardTile(player, id) {
 }
 
 function onStock() {
+  if (state.turn === 0 && state.phase === "discard" && state.selected) return playerDiscard(true);
   if (state.turn !== 0 || state.phase !== "draw") return;
   if (state.mode === "amerikan") return amerikanDrawStock();
   if (!state.wall.length) { endEmpty(); return; }
