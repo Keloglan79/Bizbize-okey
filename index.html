@@ -123,6 +123,8 @@
     position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%);
     display: flex; gap: 14px; align-items: flex-end; z-index: 2;
   }
+  body.mode-amerikan .middle { left: 42%; gap: 10px; }
+  .contract-label { position: absolute; left: 50%; top: 62%; transform: translateX(-50%); font-weight: 800; font-size: 15px; letter-spacing: .04em; color: #1a3a5c; text-align: center; z-index: 2; }
   .well { text-align: center; }
   .well .label { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; opacity: .8; margin-bottom: 6px; }
   .caption { font-size: 12px; opacity: .8; margin-top: 6px; display: block; }
@@ -357,17 +359,18 @@
       <div class="discard-slot d2" id="disc2"></div>
       <div class="discard-slot d3" id="disc3"></div>
       <div class="middle">
-        <div class="well">
-          <div class="label">Gösterge</div>
-          <div id="indicator"></div>
-          <div class="caption" id="okeyCaption"></div>
-        </div>
         <div class="well pile" id="stockPile">
           <div class="label">Deste</div>
           <div id="stockStack" class="wall-one"></div>
           <div class="caption" id="stockCount"></div>
         </div>
+        <div class="well">
+          <div class="label" id="indicatorLabel">Gösterge</div>
+          <div id="indicator"></div>
+          <div class="caption" id="okeyCaption"></div>
+        </div>
       </div>
+      <div id="contractLabel" class="contract-label"></div>
     </div>
     <div id="log">Oturmak için bir oyun ve oyuncu seç.</div>
     <div id="melds"></div>
@@ -568,7 +571,7 @@ function newRound() {
     rebuildSlots();
     log(NAMES[state.starter] + " başlıyor. Amerikano " + (state.amerikanEl + 1) + "/11: " + contract().name + ". Gösterge alınana kadar durur. İlk başlayan bedava alabilir.");
     render();
-    if (state.turn !== 0) setTimeout(aiTurn, 600);
+    if (state.turn !== 0) setTimeout(aiTurn, 3000);
     return;
   }
   const handCount = state.mode === "yuz" ? 21 : 14;
@@ -587,7 +590,7 @@ function newRound() {
   if (gostergeHits.length) msg += " Gösterge cezası: " + gostergeHits.join(", ") + ".";
   log(msg);
   render();
-  if (state.turn !== 0) setTimeout(aiTurn, 600);
+  if (state.turn !== 0) setTimeout(aiTurn, 3000);
 }
 function hasGosterge(hand) {
   return hand.some(tile => !tile.fake && tile.color === state.indicator.color && tile.num === state.indicator.num);
@@ -641,7 +644,7 @@ function render() {
     const count = (state.players[i] || []).length;
     const active = state.turn === i && state.phase !== "over" ? " active" : "";
     const openedCls = (state.mode === "yuz" || state.mode === "amerikan") && state.opened[i] ? " opened" : "";
-    seat.innerHTML = `<div class="seat${active}"><div class="seat-head">${avatarHtml(name).replace('class="avatar"', 'class="avatar' + openedCls + '"')}<div><div class="meta">${state.scores[i]} puan</div></div></div></div>`;
+    seat.innerHTML = `<div class="seat${active}"><div class="seat-head">${avatarHtml(name).replace('class="avatar"', 'class="avatar' + openedCls + '"')}<div><div class="meta" style="font-weight:800">${name}</div></div></div></div>`;
     const disc = document.getElementById("disc" + i);
     const pick = state.drawPick || { wall: false, seats: [], gosterge: false };
     const legal = state.turn === 0 && state.phase === "draw" && state.discards[i].length && (
@@ -668,9 +671,11 @@ function render() {
   ind.className = state.mode === "amerikan" && state.gostergeLive && state.turn === 0 && state.phase === "draw" ? "legal" + ((state.drawPick || {}).gosterge ? " picked" : "") : "";
   if (state.indicator && (state.mode !== "amerikan" || state.gostergeLive)) ind.appendChild(tileEl(state.indicator));
   ind.onclick = () => takeGosterge(0);
-  document.getElementById("okeyCaption").textContent = state.mode === "amerikan"
-    ? (state.gostergeLive ? "Gösterge duruyor. İlk başlayan bedava alır, diğerleri ceza çeker." : "Gösterge alındı. Joker sahte okeydir.")
-    : (state.okey ? "Okey: " + COLOR_NAME[state.okey.color] + " " + state.okey.num : "");
+  document.getElementById("okeyCaption").textContent = state.mode === "amerikan" ? "" : (state.okey ? "Okey: " + COLOR_NAME[state.okey.color] + " " + state.okey.num : "");
+  const indicatorLabel = document.getElementById("indicatorLabel");
+  if (indicatorLabel) indicatorLabel.textContent = state.mode === "amerikan" && typeof contract === "function" ? contract().name : "Gösterge";
+  const contractLabel = document.getElementById("contractLabel");
+  if (contractLabel) contractLabel.textContent = "";
   const stock = document.getElementById("stockStack");
   stock.className = "wall-one" + ((state.drawPick || {}).wall ? " picked" : "");
   stock.innerHTML = "";
@@ -683,7 +688,7 @@ function render() {
     badge.textContent = String(state.wall.length);
     stock.appendChild(badge);
   } else stock.innerHTML = `<div class="tile" style="opacity:.3">0</div>`;
-  document.getElementById("stockCount").textContent = state.wall.length + " taş";
+  document.getElementById("stockCount").textContent = state.mode === "amerikan" ? "" : state.wall.length + " taş";
   const rack = document.getElementById("rack");
   rack.innerHTML = "";
   for (let row = 0; row < 3; row++) {
@@ -854,6 +859,8 @@ function canAddSomewhere(tile) {
 function afterAmerikanDiscard(player, tile) {
   if (state.mode === "yuz" || state.mode === "amerikan") {
     if (canAddSomewhere(tile) || faceOf(tile).joker) {
+      if (!state.feedPen) state.feedPen = [0, 0, 0, 0];
+      state.feedPen[player] += 50;
       state.scores[player] += 50;
       log(NAMES[player] + (faceOf(tile).joker ? " joker attı" : " işlenebilecek taş attı") + ": +50.");
     }
@@ -1012,7 +1019,7 @@ function nextTurn() {
   state.phase = "draw";
   state.drawPick = { wall: false, seats: [], gosterge: false };
   render();
-  if (state.turn !== 0 && !(state.onlineHumans || []).includes(state.turn)) setTimeout(aiTurn, 700);
+  if (state.turn !== 0 && !(state.onlineHumans || []).includes(state.turn)) setTimeout(aiTurn, 3000);
   else log("Sıra sende. Desteye ya da soldaki taşa bas.");
 }
 
@@ -1179,7 +1186,7 @@ function startBatak() {
   state.turn = state.batak.turn;
   log("Batak " + state.batak.round + "/11. İhale. En az 4.");
   render();
-  if (state.batak.turn !== 0) setTimeout(aiBatak, 500);
+  if (state.batak.turn !== 0) setTimeout(aiBatak, 3000);
 }
 function beats(card, current, lead, trump) {
   if (!current) return true;
@@ -1256,14 +1263,14 @@ function playBatakCard(p, id) {
       state.batak.trick = [];
       if (state.batak.hands[0].length === 0) return endBatakRound();
       render();
-      if (state.batak.turn !== 0) setTimeout(aiBatak, 350);
+      if (state.batak.turn !== 0) setTimeout(aiBatak, 3000);
     }, 2000);
     return;
   }
   b.turn = (p + 1) % 4;
   state.turn = b.turn;
   render();
-  if (b.turn !== 0 && b.phase === "play") setTimeout(aiBatak, 450);
+  if (b.turn !== 0 && b.phase === "play") setTimeout(aiBatak, 3000);
 }
 function chooseTrump(suit) {
   const b = state.batak;
@@ -1274,7 +1281,7 @@ function chooseTrump(suit) {
   state.turn = b.turn;
   log("Koz: " + suit + ". " + NAMES[b.turn] + " başlıyor.");
   render();
-  if (b.turn !== 0) setTimeout(aiBatak, 450);
+  if (b.turn !== 0) setTimeout(aiBatak, 3000);
 }
 function placeBid(p, n) {
   const b = state.batak;
@@ -1297,7 +1304,7 @@ function placeBid(p, n) {
   }
   state.turn = b.turn;
   render();
-  if ((b.phase === "bid" || b.phase === "play") && b.turn !== 0) setTimeout(aiBatak, 450);
+  if ((b.phase === "bid" || b.phase === "play") && b.turn !== 0) setTimeout(aiBatak, 3000);
 }
 function suitCount(hand, suit) { return hand.filter(c => c.suit === suit).length; }
 function highCount(hand, suit) { return hand.filter(c => c.suit === suit && rankVal(c) >= 9).length; }
@@ -1845,6 +1852,7 @@ function finishAmerikan(winner, result) {
   const loss = (duz ? (result && result.pairs ? 4 : 2) : 50) * (duz ? 1 : mult);
   state.scores[winner] -= loss;
   const notes = [NAMES[winner] + " −" + loss + (okeyFinish ? " (okey)" : "")];
+  for (let i = 0; i < 4; i++) if (state.feedPen && state.feedPen[i]) notes.push(NAMES[i] + " +" + state.feedPen[i] + " (işleme/joker)");
   for (let i = 0; i < 4; i++) {
     const jokers = state.players[i].filter(t => faceOf(t).joker).length;
     if (jokers) {
@@ -2057,6 +2065,7 @@ function finish101(winner, elden) {
   const award = elden ? -202 : -101;
   state.scores[winner] += award;
   const notes = [];
+  for (let i = 0; i < 4; i++) if (state.feedPen && state.feedPen[i]) notes.push(NAMES[i] + " +" + state.feedPen[i] + " (işleme/joker)");
   for (let i = 0; i < 4; i++) {
     if (i === winner) continue;
     const pen = state.opened[i] ? handPenalty(state.players[i]) : 101;
@@ -2286,7 +2295,7 @@ function aiAmerikanDraw(p) {
   state.phase = "discard";
   state.drewMandatory = false;
   render();
-  setTimeout(aiTurn, 500);
+  setTimeout(aiTurn, 3000);
 }
 function aiTurn() {
   if (state.phase === "over" || state.turn === 0) return;
@@ -2309,7 +2318,7 @@ function aiTurn() {
     }
     state.phase = "discard";
     render();
-    setTimeout(aiTurn, 500);
+    setTimeout(aiTurn, 3000);
     return;
   }
   const hand = state.players[p];
