@@ -120,9 +120,18 @@
   .discard-slot.legal { outline: 2px dashed var(--gold); border-radius: 10px; }
   .discard-slot.picked, #indicator.picked { outline: 3px solid var(--gold); box-shadow: 0 0 12px rgba(255,214,90,.8); }
   .middle {
-    position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%);
-    display: flex; gap: 14px; align-items: flex-end; z-index: 2;
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    display: flex; flex-direction: column; align-items: center; gap: 6px; z-index: 2;
   }
+  .middle-row { display: flex; gap: 14px; align-items: flex-end; justify-content: center; }
+  #indicator { width: 32px; height: 44px; margin: 0 auto; display: flex; align-items: center; justify-content: center; }
+  #indicator:empty { border: 1px dashed rgba(255,255,255,.45); border-radius: 6px; }
+  .middle .well .label { font-size: 8px; letter-spacing: .1em; margin-bottom: 3px; }
+  #roundName { display: none; color: #fff; font-weight: 800; font-size: 14px; text-align: center; text-shadow: 0 1px 2px rgba(0,0,0,.35); white-space: nowrap; }
+  body.mode-amerikan #roundName { display: block; }
+  body.mode-amerikan #okeyCaption, body.mode-amerikan #stockCount { display: none; }
+  #doneDrawBtn { font-size: 11px; line-height: 1.05; padding: 4px 10px; }
+  #discardBtn { background: linear-gradient(180deg, #ffe680, #f2c230); color: #3a2a00; border-color: #fff1b8; font-weight: 700; }
   .well { text-align: center; }
   .well .label { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; opacity: .8; margin-bottom: 6px; }
   .caption { font-size: 12px; opacity: .8; margin-top: 6px; display: block; }
@@ -217,7 +226,11 @@
     .side-left { top: 50%; bottom: auto; left: 4px; width: 78px; transform: translateY(-50%); }
     .side-right { top: 50%; bottom: auto; right: 4px; left: auto; width: 78px; transform: translateY(-50%); }
     .side-bottom { position: absolute; bottom: 8px; left: 50%; right: auto; width: auto; margin: 0; transform: translateX(-50%); }
-    .middle { left: 50%; top: 46%; transform: translate(-50%, -50%); gap: 10px; }
+    .middle { left: 50%; top: 50%; transform: translate(-50%, -50%); gap: 4px; }
+    .middle-row { gap: 10px; }
+    #indicator { width: 30px; height: 42px; }
+    .middle .well .label { font-size: 7px; }
+    #roundName { font-size: 12px; }
     .d0 { right: 6px; bottom: 6px; left: auto; top: auto; }
     .d1 { right: 6px; top: 6px; left: auto; bottom: auto; }
     .d2 { left: 6px; top: 6px; right: auto; bottom: auto; }
@@ -369,6 +382,7 @@
       <div class="discard-slot d2" id="disc2"></div>
       <div class="discard-slot d3" id="disc3"></div>
       <div class="middle">
+        <div class="middle-row">
         <div class="well">
           <div class="label">Gösterge</div>
           <div id="indicator"></div>
@@ -379,6 +393,8 @@
           <div id="stockStack" class="wall-one"></div>
           <div class="caption" id="stockCount"></div>
         </div>
+        </div>
+        <div id="roundName"></div>
       </div>
       <div class="trick" id="trick"></div>
     </div>
@@ -389,7 +405,7 @@
         <strong id="turnLabel">Istakan</strong>
         <div>
           <span id="okeyButtons">
-            <button id="doneDrawBtn">Çekişi bitir</button>
+            <button id="doneDrawBtn">Çekişi<br>bitir</button>
             <button id="openBtn" class="primary">Aç</button>
             <button id="discardBtn" class="primary" disabled>At</button>
             <button id="finishBtn" class="danger" disabled>Bitir</button>
@@ -734,7 +750,7 @@ function renderOkey() {
   if (state.indicator && (state.mode !== "amerikan" || state.gostergeLive)) ind.appendChild(tileEl(state.indicator));
   ind.onclick = () => takeGosterge(0);
   document.getElementById("okeyCaption").textContent = state.mode === "amerikan"
-    ? (state.gostergeLive ? "Gösterge duruyor. İlk başlayan bedava alır, diğerleri ceza çeker." : "Gösterge alındı. Joker sahte okeydir.")
+    ? ""
     : (state.okey ? "Okey: " + COLOR_NAME[state.okey.color] + " " + state.okey.num : "");
   const stock = document.getElementById("stockStack");
   stock.className = "wall-one" + ((state.drawPick || {}).wall ? " picked" : "");
@@ -749,6 +765,7 @@ function renderOkey() {
     stock.appendChild(badge);
   } else stock.innerHTML = `<div class="tile" style="opacity:.3">0</div>`;
   document.getElementById("stockCount").textContent = state.wall.length + " taş";
+  document.getElementById("roundName").textContent = state.mode === "amerikan" ? contract().name : "";
   const rack = document.getElementById("rack");
   rack.innerHTML = "";
   for (let row = 0; row < 3; row++) {
