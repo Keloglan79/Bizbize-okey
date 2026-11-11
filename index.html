@@ -64,7 +64,7 @@
   }
   .square {
     width: min(100%, 520px);
-    aspect-ratio: 1 / 1;
+    aspect-ratio: 4 / 3;
     margin: 0 auto;
     position: relative;
     border-radius: 18px;
@@ -81,7 +81,7 @@
   .seat-head { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 6px; }
   .side-left .seat-head, .side-right .seat-head { flex-direction: column; gap: 4px; }
   .seat.active .name { color: var(--gold); }
-  .avatar { width: 92px; height: 122px; border-radius: 12px; overflow: hidden; display: grid; place-items: center; font-weight: 800; color: #fff; border: 2px solid rgba(255,255,255,.7); font-size: 16px; background: #123; flex: none; }
+  .avatar { width: 92px; height: 92px; border-radius: 12px; overflow: hidden; display: grid; place-items: center; font-weight: 800; color: #fff; border: 2px solid rgba(255,255,255,.7); font-size: 16px; background: #123; flex: none; }
   .avatar.opened { border: 3px solid #ffe27a; box-shadow: 0 0 0 3px rgba(255,214,90,.35), 0 0 16px 4px rgba(255,214,90,.85); animation: shine 1.4s ease-in-out infinite; }
   @keyframes shine { 50% { box-shadow: 0 0 0 4px rgba(255,236,160,.7), 0 0 22px 6px rgba(255,214,90,1); } }
   .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -152,6 +152,7 @@
   .tile.black { color: #161616; box-shadow: inset 3px 0 0 #161616, 0 6px 10px rgba(0,0,0,.16); }
   .tile.yellow { color: #ffcc00; text-shadow: 0 1px 0 #7a5a00, 0 0 1px #7a5a00; box-shadow: inset 3px 0 0 #ffcc00, 0 6px 10px rgba(0,0,0,.16); }
   .tile.joker { outline: 2px solid var(--gold); }
+  .tile.joker.standin, #melds .tile.joker.standin { outline: 2px solid #ffd23f; box-shadow: 0 0 6px 2px rgba(255,200,40,.9), inset 2px 0 0 currentColor; }
   .tile.fake { background: linear-gradient(180deg, #fff, #f3e7c2); }
   .tile.back {
     background: repeating-linear-gradient(45deg, rgba(255,255,255,.28) 0 5px, transparent 5px 10px), linear-gradient(160deg, #6aa6d4, #2f6fa8);
@@ -203,7 +204,7 @@
     #table { padding: 4px 8px 16px; }
     .board { border-width: 7px; border-radius: 16px; padding: 8px; }
     .square {
-      aspect-ratio: 1 / 1;
+      aspect-ratio: 5 / 4;
       width: 100%;
       display: block;
       position: relative;
@@ -226,7 +227,10 @@
     .discard-slot .tile { width: 28px; height: 38px; font-size: 16px; }
     .opp-rack { display: grid; width: 54px; height: 36px; padding: 3px; gap: 2px; }
     .side-left .opp-rack, .side-right .opp-rack { width: 36px; height: 54px; }
-    .avatar { width: 80px; height: 108px; border-radius: 10px; }
+    .avatar { width: 62px; height: 62px; border-radius: 10px; }
+    .side-left, .side-right { width: 66px; }
+    .middle .caption { max-width: 130px; font-size: 9px; line-height: 1.2; }
+    .well .label { margin-bottom: 3px; }
     .seat .name { font-size: 12px; }
     .seat .meta { font-size: 10px; }
     .seat-head { margin-bottom: 0; gap: 4px; }
@@ -245,7 +249,7 @@
     .picker-card h2 { font-size: 24px; }
     .cast { grid-template-columns: 1fr 1fr; gap: 8px; }
     .cast button { padding: 10px; }
-    .avatar.lg { width: 64px; height: 86px; }
+    .avatar.lg { width: 64px; height: 64px; }
     .cast .who { font-size: 16px; }
   }
 
@@ -275,7 +279,7 @@
   .cast button:hover { transform: translateY(-2px); outline: 2px solid var(--gold); }
   .cast .who { font-size: 18px; font-weight: 750; }
   .cast .role { font-size: 12px; opacity: .7; font-weight: 500; }
-  .avatar.lg { width: 72px; height: 96px; font-size: 20px; border-radius: 12px; }
+  .avatar.lg { width: 72px; height: 72px; font-size: 20px; border-radius: 12px; }
   .modal-bg {
     position: fixed; inset: 0; background: rgba(0,0,0,.55);
     display: none; align-items: center; justify-content: center; padding: 16px; z-index: 7;
@@ -302,7 +306,7 @@
   .card .mid { position: absolute; inset: 0; display: grid; place-items: center; font-size: 16px; }
   .card.red { color: #d31b1b; } .card.black { color: #1b1b1b; }
   .card.sel { outline: 3px solid #e2b34a; }
-    body.mode-batak .square { aspect-ratio: 4 / 5; width: min(100%, 460px); }
+
   .trick { position: absolute; left: 50%; top: 50%; width: 0; height: 0; z-index: 3; }
   .trick .card { position: absolute; }
   .trick .from0 { transform: translate(-50%, 6px); }
@@ -652,7 +656,8 @@ function tileEl(tile, opts = {}) {
   const el = document.createElement("div");
   if (!tile) { el.className = "tile back"; return el; }
   const f = faceOf(tile);
-  el.className = "tile " + (f.fake ? "yellow fake" : f.color) + (f.joker ? " joker" : "") + (opts.selected ? " selected" : "");
+  const colorCls = opts.asColor ? opts.asColor : (f.fake ? "yellow fake" : f.color);
+  el.className = "tile " + colorCls + (f.joker ? " joker" : "") + (opts.asColor ? " standin" : "") + (opts.selected ? " selected" : "");
   const label = opts.asNum ? String(opts.asNum) : (f.fake ? "☺" : String(f.num));
   el.textContent = label;
   el.dataset.id = tile.id;
@@ -843,7 +848,7 @@ function renderOkey() {
         const box = document.createElement("div");
         box.className = "meld";
         box.title = NAMES[m.owner] + " · eklemek için seç ve buraya bas";
-        sortMeld(m.tiles); const stand = new Map(jokerStandIns(m.tiles).map(s => [s.joker, s])); m.tiles.forEach(tile => box.appendChild(tileEl(tile, { asNum: faceOf(tile).joker && stand.get(tile) ? stand.get(tile).num : null })));
+        sortMeld(m.tiles); const stand = new Map(jokerStandIns(m.tiles).map(s => [s.joker, s])); m.tiles.forEach(tile => { const sIn = faceOf(tile).joker && stand.get(tile); box.appendChild(tileEl(tile, { asNum: sIn ? sIn.num : null, asColor: sIn ? sIn.color : null })); });
         box.onclick = () => addToMeld(mi);
         line.appendChild(box);
       });
@@ -2110,7 +2115,10 @@ function pairUp(tiles) {
     if (idx < 0) idx = 0;
     out.push([a, left.splice(idx, 1)[0]]);
   }
-  return out;
+  // Show pairs in number order; in each pair the real tile comes first and its okey right next to it.
+  const key = (pair) => { const c = pair.find(t => !faceOf(t).joker); return c ? faceOf(c).num * 10 + COLORS.indexOf(faceOf(c).color) : 999; };
+  out.forEach(pair => pair.sort((x, y) => (faceOf(x).joker ? 1 : 0) - (faceOf(y).joker ? 1 : 0)));
+  return out.sort((x, y) => key(x) - key(y));
 }
 function openExtra() {
   if (tableRound() < 2) { log("Taş ekleme ve yeni per üçüncü turda açılır."); return; }
@@ -2317,7 +2325,10 @@ function openSelected() {
   log("Açtın: " + pts + " puan.");
   render();
 }
+function isPairMeld(meld) { return meld.length === 2; }
 function canExtend(meld, tile) {
+  // Açılmış çiftlere taş eklenemez (1-1'in yanına 2 konup seri yapılamaz).
+  if (isPairMeld(meld)) return false;
   const f = faceOf(tile);
   const faces = meld.map(faceOf);
   const nums = faces.filter(x => !x.joker).map(x => x.num);
@@ -2341,6 +2352,11 @@ function jokerStandIns(meld) {
   const jokers = meld.filter(t => faceOf(t).joker);
   const concretes = meld.filter(t => !faceOf(t).joker);
   if (!jokers.length || !concretes.length) return [];
+  // In a pair the okey stands for an exact copy of the other tile.
+  if (isPairMeld(meld)) {
+    const f = faceOf(concretes[0]);
+    return [{ joker: jokers[0], color: f.color, num: f.num }];
+  }
   const faces = concretes.map(faceOf);
   const nums = faces.map(f => f.num);
   const colors = faces.map(f => f.color);
@@ -2775,7 +2791,11 @@ function aiAmerikanPlay(p) {
     const groups = findContractGroups(hand);
     if (groups && hand.length - groups.flat().length >= 1) {
       takeFromHand(p, groups.flat().map(t => t.id));
-      groups.forEach(g => state.melds.push({ owner: p, tiles: sortMeld(g) }));
+      const parts = contract().parts;
+      groups.forEach((g, gi) => {
+        if (parts[gi] && parts[gi][0] === "pairs") pairUp(g).forEach(pair => state.melds.push({ owner: p, tiles: sortMeld(pair) }));
+        else state.melds.push({ owner: p, tiles: sortMeld(g) });
+      });
       state.opened[p] = true;
       state.openedAt[p] = state.ply;
       log(NAMES[p] + " " + contract().name + " açtı.");

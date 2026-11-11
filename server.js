@@ -55,6 +55,8 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server });
 wss.on("connection", (ws) => {
   ws.room = null;
+  ws.alive = true;
+  ws.on("pong", () => { ws.alive = true; });
   ws.on("message", (raw) => {
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
@@ -128,5 +130,16 @@ wss.on("connection", (ws) => {
     else broadcast(room, { t: "roster", players: roster(room) });
   });
 });
+
+// Phones that lock or lose signal often don't close the connection properly.
+// Ping every 15 s; a connection that doesn't answer is closed, so the host sees the player leave
+// and a bot takes over their hand.
+setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.alive === false) return ws.terminate();
+    ws.alive = false;
+    try { ws.ping(); } catch {}
+  });
+}, 15000);
 
 server.listen(port, () => console.log("Bizbize Okey " + port));
