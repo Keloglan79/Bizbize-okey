@@ -680,7 +680,14 @@ function render() {
   restickStreams();
 }
 // Seats are built once and then only updated, so photos and live video are not recreated each move.
+// Online only: mark seats that a bot is playing (empty seats, or players who left).
+function botTag(i) {
+  if (mp.role !== "host" && mp.role !== "guest") return "";
+  const abs = (i + (mp.role === "guest" ? mp.abs : 0)) % 4;
+  return (state.onlineHumans || []).includes(abs) ? "" : " · 🤖 bot";
+}
 function renderSeat(i, active, meta, opened) {
+  meta += botTag(i);
   const seat = document.getElementById("seat" + i);
   const name = NAMES[i] || "";
   if (seat.dataset.name !== name || !seat.querySelector(".avatar")) {
@@ -1176,13 +1183,13 @@ document.getElementById("rulesBtn").onclick = () => state.mode === "yuz" ? show1
     <li>Sahte okey joker değildir. Okeyin yüzü gibi normal taş olarak oynanır.</li>
     <li>Herkeste 14 taş vardır. Başlayan 15 taş alır ve önce atar. Sonra her tur çek, sonra at.</li>
     <li>Ortadaki desteden çek ya da yalnızca son atılan taşı al. Deste bitince el biter, puan değişmez.</li>
-    <li>Per: aynı sayıdan, farklı renklerde 3 veya 4 taş. Seri: aynı renkte art arda 3 veya daha fazla taş. 12-13-1 olur; 2'ye devam edemez.</li>
+    <li>Per: aynı sayıdan, farklı renklerde 3 veya 4 taş. Seri: aynı renkte art arda 3 veya daha fazla taş. 1, 13'ten sonra gelebilir: 12-13-1 ve 11-12-13-1 olur; 1'den sonra 2'ye devam edemez.</li>
     <li>Bitirmek için attığın taştan sonra kalan 14 taşın tamamı per ve seri olmalı, ya da 7 aynı çift olmalı.</li>
     <li>Normal bitişte bitiren 2, 7 çiftte veya okey atarak bitişte 4 puan kaybeder. Herkes 20 ile başlar. Bir puan 0 veya altına inince maç biter.</li>
     <li>El başında göstergenin diğer kopyası kimdeyse o oyuncu hemen 1 puan kaybeder.</li>
     <li>Mustafa, kendisi dışında bir oyuncu puan kaybettikçe 1 puan daha kaybeder.</li>
   </ul>
-  <p>Bu Bizbize Okey masasıdır. 101 barajı yok, el ortasında taş açılmaz. Aynı renkte 12-13-1 geçerli bir seridir, 2'ye devam edemez.</p>
+  <p>Bu Bizbize Okey masasıdır. 101 barajı yok, el ortasında taş açılmaz. Aynı renkte 12-13-1 ve 11-12-13-1 geçerli seridir; 1'den sonra 2'ye devam edilemez.</p>
 `);
 
 function moveSelectedTo(idx) {
@@ -1248,6 +1255,8 @@ function startBatak() {
   state.batak.trick = [];
   state.batak.lead = state.batak.turn;
   state.batak.won = [0,0,0,0];
+  state.batak.played = [];
+  state.batak.voids = [[],[],[],[]];
   state.phase = "draw";
   state.turn = state.batak.turn;
   log("Batak " + state.batak.round + "/11. İhale. En az 4.");
@@ -1322,6 +1331,12 @@ function playBatakCard(p, id) {
   if (!card) return log("Bu kağıt oynanmaz.");
   if (p === 0 && mpGuest()) return guestAct("play", [id]);
   b.hands[p] = b.hands[p].filter(c => c.id !== card.id);
+  if (b.trick.length && card.suit !== b.trick[0].card.suit) {
+    // Everyone can see who could not follow suit (and who had no koz either).
+    b.voids = b.voids || [[],[],[],[]];
+    if (!b.voids[p].includes(b.trick[0].card.suit)) b.voids[p].push(b.trick[0].card.suit);
+    if (card.suit !== b.trump && !b.voids[p].includes(b.trump)) b.voids[p].push(b.trump);
+  }
   b.trick.push({ player: p, card });
   if (card.suit === b.trump) b.trumpBroken = true;
   if (b.trick.length === 4) {
@@ -1334,6 +1349,7 @@ function playBatakCard(p, id) {
     render();
     later(() => {
       if (state.mode !== "batak" || !state.batak) return;
+      state.batak.played = (state.batak.played || []).concat(state.batak.trick.map(t => t.card.id));
       state.batak.trick = [];
       if (state.batak.hands[0].length === 0) return endBatakRound();
       render();
@@ -1386,16 +1402,117 @@ function placeBid(p, n) {
 }
 function suitCount(hand, suit) { return hand.filter(c => c.suit === suit).length; }
 function highCount(hand, suit) { return hand.filter(c => c.suit === suit && rankVal(c) >= 9).length; }
+// ---------- Batak bot ----------
+// Rough number of tricks this hand can take if `trump` is koz.
+function handTricks(hand, trump) {
+  const of = (s) => hand.filter(c => c.suit === s).sort((a, b) => rankVal(b) - rankVal(a));
+  const has = (cards, r) => cards.some(c => c.rank === r);
+  const tr = of(trump);
+  const nT = tr.length;
+  let t = 0;
+  // Koz: top cards, plus long koz (the last ones usually win too).
+  let honors = 0;
+  if (has(tr, "A")) honors += 1;
+  if (has(tr, "K") && nT >= 2) honors += has(tr, "A") ? 1 : 0.7;
+  if (has(tr, "Q") && nT >= 3) honors += has(tr, "A") && has(tr, "K") ? 1 : 0.5;
+  if (has(tr, "J") && nT >= 4) honors += 0.4;
+  t += honors + Math.max(0, nT - 3) * 0.9;
+  for (const s of SUITS) {
+    if (s === trump) continue;
+    const cs = of(s);
+    const n = cs.length;
+    if (has(cs, "A")) t += 1;
+    if (has(cs, "K") && n >= 2) t += has(cs, "A") ? 0.9 : 0.5;
+    if (has(cs, "Q") && n >= 3) t += has(cs, "A") && has(cs, "K") ? 0.7 : 0.25;
+    // Short side suits let you cut with koz.
+    const spare = Math.max(0, nT - 3);
+    if (nT >= 3) t += n === 0 ? Math.min(1.6, 0.6 + spare * 0.5) : n === 1 ? 0.6 : n === 2 ? 0.25 : 0;
+  }
+  return t;
+}
 function bestTrump(p) {
   const hand = state.batak.hands[p];
-  return SUITS.slice().sort((a, b) => (suitCount(hand, b) * 3 + highCount(hand, b)) - (suitCount(hand, a) * 3 + highCount(hand, a)))[0];
+  return SUITS.slice().sort((a, b) => handTricks(hand, b) - handTricks(hand, a))[0];
 }
 function estimateTricks(p) {
   const hand = state.batak.hands[p];
-  const trump = bestTrump(p);
-  let n = highCount(hand, trump) + Math.max(0, suitCount(hand, trump) - 4);
-  SUITS.filter(s => s !== trump).forEach(s => { if (hand.some(c => c.suit === s && c.rank === "A")) n++; });
-  return Math.max(4, Math.min(13, n));
+  return Math.floor(handTricks(hand, bestTrump(p)) + 0.5);
+}
+// Cards of this suit, higher than `card`, that are still out (not played, not in my hand, not on the table).
+function higherOut(p, card) {
+  const b = state.batak;
+  const gone = new Set((b.played || []).concat(b.trick.map(t => t.card.id), b.hands[p].map(c => c.id)));
+  return RANKS.slice(rankVal(card) + 1).filter(r => !gone.has(card.suit + r)).length;
+}
+function trumpsOut(p) {
+  const b = state.batak;
+  const gone = new Set((b.played || []).concat(b.trick.map(t => t.card.id), b.hands[p].map(c => c.id)));
+  return RANKS.filter(r => !gone.has(b.trump + r)).length;
+}
+// Could a player who still has to play cut this suit with koz?
+function cutRisk(p, suit, playersLeft) {
+  const b = state.batak;
+  if (suit === b.trump || !trumpsOut(p)) return false;
+  return playersLeft.some(q => (b.voids && b.voids[q] || []).includes(suit) && !(b.voids[q] || []).includes(b.trump));
+}
+function aiBatakCard(p) {
+  const b = state.batak;
+  const legal = legalCards(p);
+  if (legal.length === 1) return legal[0];
+  const hand = b.hands[p];
+  const asc = (arr) => arr.slice().sort((a, c) => rankVal(a) - rankVal(c));
+  const isBidder = p === b.bidder;
+  const need = isBidder ? b.high - b.won[p] : (b.won[p] < 1 ? 1 : 0);
+  const others = [1, 2, 3].map(k => (p + k) % 4);
+  const master = (c) => higherOut(p, c) === 0;
+
+  if (!b.trick.length) {
+    // --- Leading ---
+    const trumps = asc(legal.filter(c => c.suit === b.trump));
+    // The bidder pulls koz out of the other hands while holding the top koz.
+    if (isBidder && trumps.length && trumpsOut(p) > 0 && master(trumps.at(-1))) return trumps.at(-1);
+    // Cash sure winners in side suits nobody can cut.
+    const winners = legal.filter(c => c.suit !== b.trump && master(c) && !cutRisk(p, c.suit, others));
+    if (winners.length) return winners.sort((a, c) => rankVal(c) - rankVal(a))[0];
+    // When no koz is left outside, my koz are all winners.
+    if (trumps.length && trumpsOut(p) === 0) return trumps.at(-1);
+    // Otherwise lead low. Defenders avoid suits the bidder can cut; the bidder works on his longest suit.
+    const suits = SUITS.filter(s => legal.some(c => c.suit === s));
+    const rate = (s) => {
+      const n = hand.filter(c => c.suit === s).length;
+      let v = isBidder ? n : -n * 0.2;
+      if (s === b.trump) v -= 3;
+      if (b.bidder != null && !isBidder && (b.voids[b.bidder] || []).includes(s)) v -= 5;
+      if (cutRisk(p, s, others)) v -= 2;
+      return v;
+    };
+    const suit = suits.sort((x, y) => rate(y) - rate(x))[0];
+    return asc(legal.filter(c => c.suit === suit))[0];
+  }
+
+  // --- Following ---
+  const lead = b.trick[0].card.suit;
+  const best = currentBest(b.trick, b.trump);
+  const winnerNow = trickWinner(b.trick, b.trump);
+  const playersLeft = others.slice(0, 3 - b.trick.length);
+  const winning = asc(legal.filter(c => beats(c, best, lead, b.trump)));
+  // Defenders take tricks away from the bidder, and everyone wants at least one trick.
+  const wantWin = need > 0 || isBidder || winnerNow === b.bidder;
+  if (winning.length && wantWin) {
+    if (!playersLeft.length) return winning[0];
+    const safe = winning.filter(c => master(c) && !(c.suit !== b.trump && cutRisk(p, c.suit, playersLeft)));
+    if (safe.length) return safe[0];
+    // Nobody left can beat it if the leftover players are void and out of koz… otherwise go high.
+    return winning.at(-1);
+  }
+  const followers = legal.filter(c => c.suit === lead);
+  if (followers.length) return asc(followers)[0];
+  // Can't follow: throw the cheapest card, keeping winners and koz.
+  const junk = legal.filter(c => c.suit !== b.trump && !master(c));
+  const pool = junk.length ? junk : legal;
+  // Prefer emptying a short suit (so I can cut it later).
+  const len = (s) => hand.filter(c => c.suit === s).length;
+  return pool.slice().sort((a, c) => len(a.suit) - len(c.suit) || rankVal(a) - rankVal(c))[0];
 }
 function aiBatak() {
   const b = state.batak;
@@ -1403,26 +1520,24 @@ function aiBatak() {
   const p = b.turn;
   if (b.phase === "bid") {
     const want = estimateTricks(p);
-    placeBid(p, want > b.high ? want : 0);
+    // Raise one step at a time while the hand is worth it.
+    placeBid(p, want > b.high && want >= 4 ? Math.max(4, b.high + 1) : 0);
+    return;
+  }
+  if (b.phase === "trump" && b.bidder === p) {
+    // A bot that took over from a player who left picks koz too.
+    b.trump = bestTrump(p);
+    b.phase = "play";
+    b.turn = p;
+    state.turn = p;
+    log("Koz: " + b.trump + ". " + NAMES[p] + " başlıyor.");
+    render();
+    later(aiBatak, 450);
     return;
   }
   if (b.phase === "play") {
     if (b.trick.length >= 4) return;
-    const legal = legalCards(p);
-    const meBidder = p === b.bidder;
-    const need = meBidder ? Math.max(0, b.high - b.won[p]) : (b.won[p] < 1 ? 1 : 0);
-    const best = b.trick.length ? currentBest(b.trick, b.trump) : null;
-    let card;
-    if (!b.trick.length) {
-      const trump = legal.filter(c => c.suit === b.trump);
-      if (meBidder && trump.length >= 4) card = trump.sort((a, c) => rankVal(c) - rankVal(a))[0];
-      else card = legal.slice().sort((a, c) => rankVal(a) - rankVal(c))[0];
-    } else if (need && legal.some(c => beats(c, best, b.trick[0].card.suit, b.trump))) {
-      card = legal.filter(c => beats(c, best, b.trick[0].card.suit, b.trump)).sort((a, c) => rankVal(a) - rankVal(c))[0];
-    } else {
-      card = legal.slice().sort((a, c) => rankVal(a) - rankVal(c))[0];
-    }
-    playBatakCard(p, card.id);
+    playBatakCard(p, aiBatakCard(p).id);
   }
 }
 function renderBatak() {
@@ -1524,21 +1639,34 @@ function mpOn(msg) {
     if (msg.host) mp.role = "host";
     else if (msg.t === "room") mp.role = "guest";
     if (!state.started) renderLobby();
-    else if (mp.role === "host") {
-      // Someone left or joined mid-game: their seat is played by the computer (or by them again).
-      const before = state.onlineHumans || [];
-      state.onlineHumans = mp.players.map(p => p.seat);
-      if (before.includes(state.turn) && !state.onlineHumans.includes(state.turn)) {
-        if (state.mode === "batak") later(aiBatak, 600); else later(aiTurn, 600);
-      }
-      render();
-    }
+    else if (mp.role === "host") mpSeatsChanged();
   }
   if (msg.t === "state" && mp.role === "guest") mpApply(msg.state, msg.names);
   if (msg.t === "act" && mp.role === "host") mpHostAct(msg.seat, msg);
   if (msg.t === "signal") onSignal(msg).catch(() => {});
   if (msg.t === "talk") { rtc.talker = msg.talker; if (rtc.stream) rtc.stream.getAudioTracks().forEach(tr => tr.enabled = rtc.talker === mp.abs); setMic(rtc.talker === mp.abs); }
   if (msg.t === "room" || msg.t === "roster") linkHumans();
+}
+// Someone left or joined during the game. A player who leaves is replaced by a bot that keeps
+// playing their hand (same tiles/cards, same score), so the game goes on. Someone who joins
+// the table code again takes that seat back from the bot.
+function mpSeatsChanged() {
+  const before = state.onlineHumans || [];
+  const now = (mp.players || []).map(p => p.seat);
+  state.onlineHumans = now;
+  const notes = [];
+  before.filter(s => !now.includes(s)).forEach(s => notes.push(NAMES[s] + " masadan ayrıldı; eli bot oynuyor."));
+  (mp.players || []).filter(p => !before.includes(p.seat)).forEach(p => {
+    notes.push(p.name + " masaya oturdu ve " + NAMES[p.seat] + " yerine oynuyor.");
+    NAMES[p.seat] = p.name;
+  });
+  if (notes.length) log(notes.join(" "));
+  // If it is the leaver's turn right now, the bot moves at once.
+  const b = state.batak;
+  if (state.mode === "batak" && b && b.phase !== "over") {
+    if (isBot(b.turn)) later(aiBatak, 600);
+  } else if (state.phase !== "over" && isBot(state.turn)) later(aiTurn, 600);
+  render();
 }
 // Turn the whole table so that seat k sits at the bottom (index 0).
 // Used by guests to see the table from their own chair, and by the host to run a guest's move.
@@ -1555,7 +1683,7 @@ function rotateState(k) {
   (state.melds || []).forEach(m => { m.owner = seat(m.owner); });
   const b = state.batak;
   if (b && b.hands) {
-    ["hands", "bids", "passed", "won"].forEach(f => { if (b[f]) b[f] = rot(b[f]); });
+    ["hands", "bids", "passed", "won", "voids"].forEach(f => { if (b[f]) b[f] = rot(b[f]); });
     b.turn = seat(b.turn);
     b.lead = seat(b.lead);
     b.bidder = seat(b.bidder);
@@ -1563,7 +1691,7 @@ function rotateState(k) {
   }
 }
 function mpSnapshot() {
-  return JSON.parse(JSON.stringify({ scores: state.scores, round: state.round, dealer: state.dealer, players: state.players, wall: state.wall, discards: state.discards, indicator: state.indicator, okey: state.okey, turn: state.turn, phase: state.phase, starter: state.starter, mode: state.mode, amerikanEl: state.amerikanEl, opened: state.opened, openedAt: state.openedAt, melds: state.melds, ply: state.ply, gostergeLive: state.gostergeLive, batak: state.batak, note: state.note || null, modal: mp.modal }));
+  return JSON.parse(JSON.stringify({ scores: state.scores, round: state.round, dealer: state.dealer, players: state.players, wall: state.wall, discards: state.discards, indicator: state.indicator, okey: state.okey, turn: state.turn, phase: state.phase, starter: state.starter, mode: state.mode, amerikanEl: state.amerikanEl, opened: state.opened, openedAt: state.openedAt, melds: state.melds, ply: state.ply, gostergeLive: state.gostergeLive, batak: state.batak, onlineHumans: state.onlineHumans || [], note: state.note || null, modal: mp.modal }));
 }
 function mpBroadcast() {
   if (mp.role !== "host" || mp.rot) return;
@@ -2439,57 +2567,203 @@ function ai101Discard(p) {
     return;
   }
   if (state.mode === "amerikan") return aiAmerikanPlay(p);
-  const hand = state.players[p];
-  if (!state.opened[p]) {
-    let pool = hand.slice();
-    const found = [];
-    for (let n = 0; n < 6; n++) {
-      const g = pullOneGroup(pool);
-      if (!g) break;
-      found.push(g);
-      pool = pool.filter(t => !g.includes(t));
-    }
-    if (found.length && groupsPoints(found) >= 101 && pool.length) {
-      const ids = found.flat().map(t => t.id);
-      takeFromHand(p, ids);
-      found.forEach(g => state.melds.push({ owner: p, tiles: g }));
-      state.opened[p] = true;
-      log(NAMES[p] + " " + groupsPoints(found) + " ile açtı.");
-    }
-  } else {
-    let guard = 0;
-    while (state.players[p].length > 1 && guard++ < 6) {
-      const g = pullOneGroup(state.players[p]);
-      if (!g || state.players[p].length - g.length < 1) break;
-      takeFromHand(p, g.map(t => t.id));
-      state.melds.push({ owner: p, tiles: sortMeld(g) });
-    }
-    const extra = [];
-    state.players[p].slice().forEach(tile => {
-      const meld = state.melds.find(m => canExtend(m.tiles, tile));
-      if (meld && state.players[p].length - extra.length > 1) {
-        meld.tiles.push(tile);
-        sortMeld(meld.tiles);
-        extra.push(tile.id);
-      }
-    });
-    if (extra.length) takeFromHand(p, extra);
-    state.players[p].slice().forEach(tile => {
-      const meld = state.melds.find(m => m.owner !== p && jokerStandIns(m.tiles).some(s => s.color === faceOf(tile).color && s.num === faceOf(tile).num));
-      if (meld) swapJoker(p, tile, meld.tiles);
-    });
-  }
+  if (ai101Play(p)) return;
   const left = state.players[p];
   if (state.opened[p] && left.length === 1) {
     discardTile(p, left[0].id, true);
-    if (state.mode === "amerikan") finishAmerikan(p, null);
-    else finish101(p, false);
+    finish101(p, false);
     return;
   }
-  const discardId = chooseDiscard(p);
-  const dropped = discardTile(p, discardId);
-  if (dropped) log(NAMES[p] + " " + describe(dropped) + " attı" + (state.discards[p].includes(dropped) ? "." : ", taş çifte gitti."));
+  const dropped = discardTile(p, choose101Discard(p));
+  if (dropped) log(NAMES[p] + " " + describe(dropped) + " attı.");
   nextTurn();
+}
+
+// ---------- 101 bot ----------
+// Finds the pers/series that are worth the most points in a hand (searches all combinations, with a time budget).
+function bestMelds(tiles, budget) {
+  budget = budget || 80000;
+  const jokerTiles = tiles.filter(t => faceOf(t).joker);
+  const byKey = new Map();
+  for (const t of tiles) {
+    const f = faceOf(t);
+    if (f.joker) continue;
+    const k = f.color + "|" + f.num;
+    if (!byKey.has(k)) byKey.set(k, []);
+    byKey.get(k).push(t);
+  }
+  const cnt = new Map([...byKey].map(([k, a]) => [k, a.length]));
+  const J = jokerTiles.length;
+  const cands = [];
+  const subsets = [[0,1,2],[0,1,3],[0,2,3],[1,2,3],[0,1,2,3]];
+  for (let n = 1; n <= 13; n++) {
+    for (const sub of subsets) {
+      const keys = sub.map(i => COLORS[i] + "|" + n).filter(k => cnt.get(k));
+      const jokers = sub.length - keys.length;
+      if (keys.length && jokers <= J) cands.push({ keys, jokers, value: n * sub.length });
+    }
+  }
+  for (const c of COLORS) {
+    for (let a = 1; a <= 11; a++) {
+      for (let z = a + 2; z <= 13; z++) {
+        const keys = [];
+        let value = 0;
+        for (let v = a; v <= z; v++) { value += v; if (cnt.get(c + "|" + v)) keys.push(c + "|" + v); }
+        const jokers = (z - a + 1) - keys.length;
+        if (jokers > J) { if (z > a + 2 + J) break; continue; }
+        if (keys.length) cands.push({ keys, jokers, value });
+      }
+    }
+  }
+  const byAnchor = new Map();
+  for (const c of cands) for (const k of c.keys) {
+    if (!byAnchor.has(k)) byAnchor.set(k, []);
+    byAnchor.get(k).push(c);
+  }
+  byAnchor.forEach(list => list.sort((x, y) => y.value - x.value));
+  const order = [...cnt.keys()].sort((x, y) => Number(x.split("|")[1]) - Number(y.split("|")[1]) || x.localeCompare(y));
+  let remainingValue = 0;
+  for (const [k, n] of cnt) remainingValue += n * Number(k.split("|")[1]);
+  let best = { value: -1, chosen: [] };
+  let nodes = 0;
+  const chosen = [];
+  function dfs(value, jLeft, rest) {
+    if (++nodes > budget) return;
+    if (value > best.value) best = { value, chosen: chosen.slice() };
+    if (value + rest + jLeft * 13 <= best.value) return;
+    const anchor = order.find(k => cnt.get(k) > 0);
+    if (!anchor) return;
+    const av = Number(anchor.split("|")[1]);
+    for (const c of byAnchor.get(anchor) || []) {
+      if (c.jokers > jLeft || !c.keys.every(k => cnt.get(k) > 0)) continue;
+      let used = 0;
+      c.keys.forEach(k => { cnt.set(k, cnt.get(k) - 1); used += Number(k.split("|")[1]); });
+      chosen.push(c);
+      dfs(value + c.value, jLeft - c.jokers, rest - used);
+      chosen.pop();
+      c.keys.forEach(k => cnt.set(k, cnt.get(k) + 1));
+    }
+    // or leave this tile out
+    cnt.set(anchor, cnt.get(anchor) - 1);
+    dfs(value, jLeft, rest - av);
+    cnt.set(anchor, cnt.get(anchor) + 1);
+  }
+  dfs(0, J, remainingValue);
+  // Turn the chosen patterns back into real tiles.
+  const pools = new Map([...byKey].map(([k, a]) => [k, a.slice()]));
+  const jokersLeft = jokerTiles.slice();
+  const groups = best.chosen.map(c => c.keys.map(k => pools.get(k).pop()).concat(jokersLeft.splice(0, c.jokers)));
+  const usedIds = new Set(groups.flat().map(t => t.id));
+  return { value: Math.max(0, best.value), groups, leftover: tiles.filter(t => !usedIds.has(t.id)) };
+}
+// You must keep one tile to discard. If every tile fits, take one tile off a 4+ group (or drop the cheapest group).
+function keepOneTile(res) {
+  if (res.leftover.length) return res;
+  const groups = res.groups.map(g => g.slice());
+  const big = groups.map((g, i) => ({ g, i })).filter(x => x.g.length >= 4).sort((a, b) => a.g.length - b.g.length)[0];
+  if (big) {
+    const g = big.g;
+    const concretes = g.filter(t => !faceOf(t).joker);
+    const nums = concretes.map(t => faceOf(t).num);
+    const isRun = new Set(nums).size === nums.length && new Set(concretes.map(t => faceOf(t).color)).size === 1;
+    // From a run take an end tile; from a per any tile.
+    let pick = concretes[0];
+    if (isRun) pick = concretes.reduce((lo, t) => faceOf(t).num < faceOf(lo).num ? t : lo, concretes[0]);
+    g.splice(g.indexOf(pick), 1);
+    return { value: groupsPoints(groups), groups, leftover: [pick] };
+  }
+  groups.sort((a, b) => groupValue(a) - groupValue(b));
+  const dropped = groups.shift() || [];
+  return { value: groupsPoints(groups), groups, leftover: dropped };
+}
+function layGroups(p, groups) {
+  groups.forEach(g => {
+    takeFromHand(p, g.map(t => t.id));
+    state.melds.push({ owner: p, tiles: sortMeld(g.slice()) });
+  });
+}
+function ai101Play(p) {
+  // 1) Not opened yet: open when the best combination reaches 101 — or finish "elden" when everything but one tile fits.
+  if (!state.opened[p]) {
+    const res = keepOneTile(bestMelds(state.players[p]));
+    const pts = groupsPoints(res.groups);
+    if (pts >= 101 && res.leftover.length === 1) {
+      layGroups(p, res.groups);
+      discardTile(p, res.leftover[0].id, true);
+      log(NAMES[p] + " elden bitirdi!");
+      finish101(p, true);
+      return true;
+    }
+    if (pts >= 101) {
+      layGroups(p, res.groups);
+      state.opened[p] = true;
+      log(NAMES[p] + " " + pts + " ile açtı.");
+    }
+  }
+  if (state.opened[p]) {
+    // 2) Win back okeys from other players' pers with real tiles.
+    state.players[p].slice().forEach(tile => {
+      if (faceOf(tile).joker || state.players[p].length <= 1) return;
+      const meld = state.melds.find(m => m.owner !== p && jokerStandIns(m.tiles).some(s => s.color === faceOf(tile).color && s.num === faceOf(tile).num));
+      if (meld) swapJoker(p, tile, meld.tiles);
+    });
+    // 3) Lay down every new per/seri that fits, keeping one tile to discard.
+    const res = bestMelds(state.players[p]);
+    if (res.groups.length) {
+      const kept = keepOneTile(res);
+      layGroups(p, kept.groups);
+    }
+    // 4) Add single tiles to any per on the table (real tiles first; okeys only if that finishes the hand).
+    let changed = true;
+    while (changed && state.players[p].length > 1) {
+      changed = false;
+      const hand = state.players[p];
+      const order = hand.slice().sort((a, b) => (faceOf(a).joker ? 1 : 0) - (faceOf(b).joker ? 1 : 0) || tilePoints(b) - tilePoints(a));
+      for (const tile of order) {
+        if (state.players[p].length <= 1) break;
+        if (faceOf(tile).joker && state.players[p].length > 2) continue;
+        const meld = state.melds.find(m => canExtend(m.tiles, tile));
+        if (!meld) continue;
+        meld.tiles.push(tile);
+        sortMeld(meld.tiles);
+        takeFromHand(p, [tile.id]);
+        changed = true;
+      }
+    }
+  }
+  return false;
+}
+// Which tile to throw: one that is not part of a per/seri, cannot be added to the table (+50),
+// is not an okey, has little chance of making a group, and (once opened) costs the most points.
+function choose101Discard(p) {
+  const hand = state.players[p];
+  const res = bestMelds(hand, 30000);
+  let pool = res.leftover.filter(t => !faceOf(t).joker);
+  if (!pool.length) pool = hand.filter(t => !faceOf(t).joker);
+  if (!pool.length) pool = hand.slice();
+  const safe = pool.filter(t => !canAddSomewhere(t));
+  if (safe.length) pool = safe;
+  const nextP = (p + 1) % 4;
+  const score = (t) => {
+    const f = faceOf(t);
+    let keep = handUsefulness(res.leftover, t) * 6;
+    keep -= state.opened[p] ? tilePoints(t) * 2 : tilePoints(t) * 0.3;
+    // Don't feed the next player tiles that look like what they have been collecting.
+    for (const d of (state.taken && state.taken[nextP]) || []) if (sameLine(f, faceOf(d))) keep += 15;
+    // Tiles already thrown by others are usually safe.
+    for (let i = 0; i < 4; i++) for (const d of state.discards[i] || []) if (sameLine(f, faceOf(d))) keep -= 3;
+    return keep;
+  };
+  return pool.slice().sort((a, b) => score(a) - score(b))[0].id;
+}
+function wants101(player, tile) {
+  const f = faceOf(tile);
+  if (f.joker) return true;
+  const hand = state.players[player];
+  if (state.opened[player] && canAddSomewhere(tile)) return true;
+  const before = bestMelds(hand, 20000).value;
+  const after = bestMelds(hand.concat([tile]), 20000).value;
+  return after - before >= Math.max(f.num, 1) && after > before;
 }
 
 function aiAmerikanPlay(p) {
@@ -2630,6 +2904,7 @@ function nextCanLayOff(player, tile) {
   return state.melds.some(m => canExtend(m.tiles, tile));
 }
 function wantsDiscard(player, tile) {
+  if (state.mode === "yuz") return wants101(player, tile);
   const hand = state.players[player];
   const f = faceOf(tile);
   if (f.joker) return true;
@@ -2748,10 +3023,10 @@ function partition(tiles) {
         }
       }
     }
-    // runs including anchor, length 3..13, anchor at any index, wrap only exactly 12-13-1
-    for (let len = 3; len <= 13; len++) {
+    // runs including anchor, length 3..13; in Okey a 1 may also sit after 13 (…-12-13-1)
+    for (const av of anchorValues(fa.num)) for (let len = 3; len <= 13; len++) {
       for (let pos = 0; pos < len; pos++) {
-        const seq = runSeq(fa.num, pos, len);
+        const seq = runSeq(av, pos, len);
         if (!seq) continue;
         const used = [anchor];
         let need = 0;
@@ -2792,16 +3067,18 @@ function combinations(arr, k) {
   if (k > 0) go(0, []);
   return out;
 }
-function runSeq(anchorNum, pos, len) {
-  if (state.mode === "duz" && len === 3) {
-    const wrap = [12, 13, 1];
-    if (wrap[pos] === anchorNum) return wrap.slice();
-  }
-  const start = anchorNum - pos;
+// Okey: 1 may come after 13 (12-13-1, 11-12-13-1, …) but the run cannot go on to 2.
+// The value 14 stands for that "high" 1.
+function anchorValues(num) {
+  return state.mode === "duz" && num === 1 ? [1, 14] : [num];
+}
+function runSeq(anchorVal, pos, len) {
+  const start = anchorVal - pos;
   if (start < 1) return null;
+  const end = start + len - 1;
+  if (end > (state.mode === "duz" ? 14 : 13)) return null;
   const seq = [];
-  for (let i = 0; i < len; i++) seq.push(start + i);
-  if (seq.some(n => n > 13)) return null;
+  for (let v = start; v <= end; v++) seq.push(v === 14 ? 1 : v);
   return seq;
 }
 </script>
