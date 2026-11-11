@@ -123,8 +123,6 @@
     position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%);
     display: flex; gap: 14px; align-items: flex-end; z-index: 2;
   }
-  body.mode-amerikan .middle { left: 42%; gap: 10px; }
-  .contract-label { position: absolute; left: 50%; top: 62%; transform: translateX(-50%); font-weight: 800; font-size: 15px; letter-spacing: .04em; color: #1a3a5c; text-align: center; z-index: 2; }
   .well { text-align: center; }
   .well .label { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; opacity: .8; margin-bottom: 6px; }
   .caption { font-size: 12px; opacity: .8; margin-top: 6px; display: block; }
@@ -189,6 +187,14 @@
   body.mode-101 #openBtn, body.mode-101 #addBtn { display: inline-block; }
   body.mode-101.duz-hand #openBtn, body.mode-101.duz-hand #addBtn { display: none; }
   #drawBtn, #takeBtn { display: none; }
+  #doneDrawBtn { display: none; }
+  body.mode-amerikan #doneDrawBtn { display: inline-block; }
+  #batakBar { display: none; }
+  body.mode-batak #batakBar { display: inline-flex; margin: 0; }
+  body.mode-batak #okeyButtons, body.mode-batak .discard-slot { display: none; }
+  body:not(.mode-batak) .trick { display: none; }
+  .card.off { opacity: .45; cursor: not-allowed; }
+  .batak-info { text-align: center; margin-top: 6px; font-size: 14px; }
   @media (max-width: 800px) {
     header { padding: 8px 10px 2px; gap: 6px; }
     h1 { font-size: 20px; letter-spacing: .04em; }
@@ -297,7 +303,7 @@
   .card.red { color: #d31b1b; } .card.black { color: #1b1b1b; }
   .card.sel { outline: 3px solid #e2b34a; }
     body.mode-batak .square { aspect-ratio: 4 / 5; width: min(100%, 460px); }
-  .trick { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+  .trick { position: absolute; left: 50%; top: 50%; width: 0; height: 0; z-index: 3; }
   .trick .card { position: absolute; }
   .trick .from0 { transform: translate(-50%, 6px); }
   .trick .from1 { transform: translate(10px, -50%); }
@@ -359,18 +365,18 @@
       <div class="discard-slot d2" id="disc2"></div>
       <div class="discard-slot d3" id="disc3"></div>
       <div class="middle">
+        <div class="well">
+          <div class="label">Gösterge</div>
+          <div id="indicator"></div>
+          <div class="caption" id="okeyCaption"></div>
+        </div>
         <div class="well pile" id="stockPile">
           <div class="label">Deste</div>
           <div id="stockStack" class="wall-one"></div>
           <div class="caption" id="stockCount"></div>
         </div>
-        <div class="well">
-          <div class="label" id="indicatorLabel">Gösterge</div>
-          <div id="indicator"></div>
-          <div class="caption" id="okeyCaption"></div>
-        </div>
       </div>
-      <div id="contractLabel" class="contract-label"></div>
+      <div class="trick" id="trick"></div>
     </div>
     <div id="log">Oturmak için bir oyun ve oyuncu seç.</div>
     <div id="melds"></div>
@@ -378,12 +384,15 @@
       <div class="istaka-bar">
         <strong id="turnLabel">Istakan</strong>
         <div>
-          <button id="doneDrawBtn">Çekişi bitir</button>
-          <button id="openBtn" class="primary">Aç</button>
-          <button id="discardBtn" class="primary" disabled>At</button>
-          <button id="finishBtn" class="danger" disabled>Bitir</button>
+          <span id="okeyButtons">
+            <button id="doneDrawBtn">Çekişi bitir</button>
+            <button id="openBtn" class="primary">Aç</button>
+            <button id="discardBtn" class="primary" disabled>At</button>
+            <button id="finishBtn" class="danger" disabled>Bitir</button>
+          </span>
+          <span id="batakBar" class="bidbar"></span>
           <button id="micBtn" class="mic" type="button" title="Basılı tut, konuş">🎤</button>
-    <button id="camBtn" class="mic" type="button" title="Kamerayı aç/kapat">📷</button>
+          <button id="camBtn" class="mic" type="button" title="Kamerayı aç/kapat">📷</button>
         </div>
       </div>
       <div id="rack"></div>
@@ -513,6 +522,21 @@ function shuffle(a) {
   }
   return a;
 }
+// Every new hand gets a new "generation". Timers from an old hand are ignored,
+// so pressing "Yeni el" never lets a stale bot move play twice in the new hand.
+let gen = 0;
+function later(fn, ms) {
+  const g = gen;
+  setTimeout(() => { if (g === gen) fn(); }, ms);
+}
+// Is this seat (in the current view) played by the computer?
+function isBot(seat) {
+  if (mpGuest()) return false;
+  const abs = (seat + (mp.rot || 0)) % 4;
+  if (abs === 0) return false;
+  return !(state.onlineHumans || []).includes(abs);
+}
+const freshPick = () => ({ wall: false, seats: [], gosterge: false });
 let tileSeq = 1;
 function makeDeck() {
   const tiles = [];
@@ -537,6 +561,10 @@ function faceOf(tile) {
   return { color: tile.color, num: tile.num, joker, fake: false };
 }
 function newRound() {
+  if (mpGuest()) { log("Yeni eli masayı açan başlatır."); return; }
+  gen++;
+  mp.modal = null;
+  document.getElementById("modal").classList.remove("show");
   if (state.mode === "batak") return startBatak();
   state.round++;
   state.selected = null;
@@ -558,7 +586,8 @@ function newRound() {
   state.melds = [];
   state.picked = [];
   state.drewMandatory = false;
-  state.drawPick = { wall: false, seats: [], gosterge: false };
+  state.drawPick = freshPick();
+  state.ply = 0;
   state.starter = (state.dealer + 1) % 4;
   if (state.mode === "amerikan") {
     for (let i = 0; i < 4; i++) state.players[i] = deck.splice(0, 14);
@@ -568,10 +597,12 @@ function newRound() {
     state.ply = 0;
     state.turn = state.starter;
     state.phase = "draw";
+    // Kural: açık taş, başlayanın solundan atılmış sayılır.
+    state.discards[prevOf(state.starter)].push(state.wall.pop());
     rebuildSlots();
     log(NAMES[state.starter] + " başlıyor. Amerikano " + (state.amerikanEl + 1) + "/11: " + contract().name + ". Gösterge alınana kadar durur. İlk başlayan bedava alabilir.");
     render();
-    if (state.turn !== 0) setTimeout(aiTurn, 3000);
+    if (isBot(state.turn)) later(aiTurn, 600);
     return;
   }
   const handCount = state.mode === "yuz" ? 21 : 14;
@@ -590,7 +621,7 @@ function newRound() {
   if (gostergeHits.length) msg += " Gösterge cezası: " + gostergeHits.join(", ") + ".";
   log(msg);
   render();
-  if (state.turn !== 0) setTimeout(aiTurn, 3000);
+  if (isBot(state.turn)) later(aiTurn, 600);
 }
 function hasGosterge(hand) {
   return hand.some(tile => !tile.fake && tile.color === state.indicator.color && tile.num === state.indicator.num);
@@ -611,7 +642,11 @@ function applyGostergePenalty() {
   }
   return hits;
 }
-function log(msg) { document.getElementById("log").textContent = msg; }
+function log(msg) {
+  // While the host is running a guest's move, messages go back to that guest.
+  if (mp.rot) { mp.note = msg; return; }
+  document.getElementById("log").textContent = msg;
+}
 
 function tileEl(tile, opts = {}) {
   const el = document.createElement("div");
@@ -636,17 +671,35 @@ function placeOnRack(tile) {
 function tileById(id) { return state.players[0].find(t => t.id === id); }
 
 function render() {
+  if (mp.rot) return; // host is temporarily viewing the table from a guest's seat
+  document.body.classList.toggle("mode-batak", state.mode === "batak");
+  document.body.classList.toggle("mode-amerikan", state.mode === "amerikan");
+  if (state.mode === "batak") renderBatak();
+  else renderOkey();
+  mpBroadcast();
+  restickStreams();
+}
+// Seats are built once and then only updated, so photos and live video are not recreated each move.
+function renderSeat(i, active, meta, opened) {
+  const seat = document.getElementById("seat" + i);
+  const name = NAMES[i] || "";
+  if (seat.dataset.name !== name || !seat.querySelector(".avatar")) {
+    seat.innerHTML = `<div class="seat"><div class="seat-head">${avatarHtml(name)}<div><div class="name"></div><div class="meta"></div></div></div></div>`;
+    seat.dataset.name = name;
+  }
+  seat.firstElementChild.className = "seat" + (active ? " active" : "");
+  seat.querySelector(".avatar").classList.toggle("opened", !!opened);
+  seat.querySelector(".name").textContent = name;
+  seat.querySelector(".meta").textContent = meta;
+}
+function renderOkey() {
   const prev = prevOf(state.turn);
   for (let i = 0; i < 4; i++) {
-    const seat = document.getElementById("seat" + i);
-    const name = NAMES[i] || "";
-    const look = LOOK[name] || { color: "#666" };
-    const count = (state.players[i] || []).length;
-    const active = state.turn === i && state.phase !== "over" ? " active" : "";
-    const openedCls = (state.mode === "yuz" || state.mode === "amerikan") && state.opened[i] ? " opened" : "";
-    seat.innerHTML = `<div class="seat${active}"><div class="seat-head">${avatarHtml(name).replace('class="avatar"', 'class="avatar' + openedCls + '"')}<div><div class="meta" style="font-weight:800">${name}</div></div></div></div>`;
+    const active = state.turn === i && state.phase !== "over";
+    const opened = (state.mode === "yuz" || state.mode === "amerikan") && state.opened[i];
+    renderSeat(i, active, state.scores[i] + " puan", opened);
     const disc = document.getElementById("disc" + i);
-    const pick = state.drawPick || { wall: false, seats: [], gosterge: false };
+    const pick = state.drawPick || freshPick();
     const legal = state.turn === 0 && state.phase === "draw" && state.discards[i].length && (
       state.mode !== "amerikan" ? i === prev : i !== 0
     );
@@ -661,21 +714,16 @@ function render() {
     }
     if (pile.length) spot.appendChild(tileEl(pile.at(-1)));
     else spot.insertAdjacentHTML("beforeend", `<div class="tile" style="opacity:.28">—</div>`);
-    disc.onclick = () => {
-      if (state.turn === 0 && state.phase === "discard" && state.selected && i === 0) return playerDiscard(false);
-      onDiscardPile(i);
-    };
+    disc.onclick = () => onDiscardPile(i);
   }
   const ind = document.getElementById("indicator");
   ind.innerHTML = "";
   ind.className = state.mode === "amerikan" && state.gostergeLive && state.turn === 0 && state.phase === "draw" ? "legal" + ((state.drawPick || {}).gosterge ? " picked" : "") : "";
   if (state.indicator && (state.mode !== "amerikan" || state.gostergeLive)) ind.appendChild(tileEl(state.indicator));
   ind.onclick = () => takeGosterge(0);
-  document.getElementById("okeyCaption").textContent = state.mode === "amerikan" ? "" : (state.okey ? "Okey: " + COLOR_NAME[state.okey.color] + " " + state.okey.num : "");
-  const indicatorLabel = document.getElementById("indicatorLabel");
-  if (indicatorLabel) indicatorLabel.textContent = state.mode === "amerikan" && typeof contract === "function" ? contract().name : "Gösterge";
-  const contractLabel = document.getElementById("contractLabel");
-  if (contractLabel) contractLabel.textContent = "";
+  document.getElementById("okeyCaption").textContent = state.mode === "amerikan"
+    ? (state.gostergeLive ? "Gösterge duruyor. İlk başlayan bedava alır, diğerleri ceza çeker." : "Gösterge alındı. Joker sahte okeydir.")
+    : (state.okey ? "Okey: " + COLOR_NAME[state.okey.color] + " " + state.okey.num : "");
   const stock = document.getElementById("stockStack");
   stock.className = "wall-one" + ((state.drawPick || {}).wall ? " picked" : "");
   stock.innerHTML = "";
@@ -688,7 +736,7 @@ function render() {
     badge.textContent = String(state.wall.length);
     stock.appendChild(badge);
   } else stock.innerHTML = `<div class="tile" style="opacity:.3">0</div>`;
-  document.getElementById("stockCount").textContent = state.mode === "amerikan" ? "" : state.wall.length + " taş";
+  document.getElementById("stockCount").textContent = state.wall.length + " taş";
   const rack = document.getElementById("rack");
   rack.innerHTML = "";
   for (let row = 0; row < 3; row++) {
@@ -789,12 +837,11 @@ function render() {
         box.className = "meld";
         box.title = NAMES[m.owner] + " · eklemek için seç ve buraya bas";
         sortMeld(m.tiles); const stand = new Map(jokerStandIns(m.tiles).map(s => [s.joker, s])); m.tiles.forEach(tile => box.appendChild(tileEl(tile, { asNum: faceOf(tile).joker && stand.get(tile) ? stand.get(tile).num : null })));
-        box.onclick = (e) => { e.stopPropagation(); addToMeld(mi); };
+        box.onclick = () => addToMeld(mi);
         line.appendChild(box);
       });
       melds.appendChild(line);
     });
-    melds.onclick = () => openSelected();
   }
   const me = NAMES[0] || "Sen";
   document.getElementById("turnLabel").textContent = myTurn
@@ -859,8 +906,6 @@ function canAddSomewhere(tile) {
 function afterAmerikanDiscard(player, tile) {
   if (state.mode === "yuz" || state.mode === "amerikan") {
     if (canAddSomewhere(tile) || faceOf(tile).joker) {
-      if (!state.feedPen) state.feedPen = [0, 0, 0, 0];
-      state.feedPen[player] += 50;
       state.scores[player] += 50;
       log(NAMES[player] + (faceOf(tile).joker ? " joker attı" : " işlenebilecek taş attı") + ": +50.");
     }
@@ -879,7 +924,7 @@ function afterAmerikanDiscard(player, tile) {
     }
   }
 }
-function discardTile(player, id) {
+function discardTile(player, id, finishing) {
   const hand = state.players[player];
   const idx = hand.findIndex(t => t.id === id);
   if (idx < 0) return null;
@@ -890,14 +935,15 @@ function discardTile(player, id) {
     const si = state.slots.indexOf(id);
     if (si >= 0) state.slots[si] = null;
   }
-  if (state.mode === "amerikan" || state.mode === "yuz") afterAmerikanDiscard(player, t);
+  // The tile you finish with is never punished as an "işlek taş".
+  if (!finishing && (state.mode === "amerikan" || state.mode === "yuz")) afterAmerikanDiscard(player, t);
   return t;
 }
 
 function onStock() {
-  if (state.turn === 0 && state.phase === "discard" && state.selected) return playerDiscard(true);
   if (state.turn !== 0 || state.phase !== "draw") return;
   if (state.mode === "amerikan") return amerikanDrawStock();
+  if (mpGuest()) return guestAct("stock");
   if (!state.wall.length) { endEmpty(); return; }
   drawFromWall(0);
   state.phase = "discard";
@@ -905,7 +951,7 @@ function onStock() {
   render();
 }
 function ensureDrawPick() {
-  if (!state.drawPick) state.drawPick = { wall: false, seats: [], gosterge: false };
+  if (!state.drawPick) state.drawPick = freshPick();
   return state.drawPick;
 }
 function amerikanDrawStock() {
@@ -921,10 +967,12 @@ function amerikanFinishDraw() {
   const left = prevOf(0);
   const hasLeft = pick.seats.includes(left);
   if (pick.wall === hasLeft) { log("Soldan ya da ortadan birini seç."); return; }
-  const extras = pick.seats.filter(s => s === 1 || s === 2);
+  if (mpGuest()) return guestAct("finishDraw");
+  const extras = pick.seats.filter(s => (s === 1 || s === 2) && state.discards[s].length);
   const freeG = pick.gosterge && state.starter === 0 && state.ply === 0;
   const penalties = extras.length + (pick.gosterge && !freeG ? 1 : 0);
-  if (state.wall.length < penalties) { log("Ceza taşları için destede yeter taş yok."); return; }
+  if (hasLeft && !state.discards[left].length) { log("Soldaki taş artık yok."); return; }
+  if (state.wall.length < penalties + (pick.wall ? 1 : 0)) { log("Ceza taşları için destede yeter taş yok."); return; }
   const got = [];
   if (hasLeft) got.push(takeFromPile(0, left));
   if (pick.wall) got.push(drawFromWall(0));
@@ -937,7 +985,7 @@ function amerikanFinishDraw() {
     state.gostergeLive = false;
   }
   for (let n = 0; n < penalties; n++) got.push(drawFromWall(0));
-  state.drawPick = { wall: false, seats: [], gosterge: false };
+  state.drawPick = freshPick();
   state.phase = "discard";
   log("Çekiş bitti. " + got.filter(Boolean).map(describe).join(", ") + " ıstakaya geldi.");
   render();
@@ -947,6 +995,7 @@ function onDiscardPile(owner) {
   if (state.mode === "amerikan") return amerikanTakeDiscard(owner);
   if (owner !== prevOf(0)) return;
   if (!state.discards[owner].length) return;
+  if (mpGuest()) return guestAct("take", [owner]);
   const t = takeDiscard(0);
   state.phase = "discard";
   log(NAMES[owner] + " oyuncusundan " + describe(t) + " aldın. Yerine koy, sonra sağına at.");
@@ -990,6 +1039,8 @@ function describe(t) {
 
 function playerDiscard(finish) {
   if (state.turn !== 0 || state.phase !== "discard" || !state.selected) return;
+  if (mpGuest()) return guestAct("discard", [!!finish]);
+  if (!tileById(state.selected)) { state.selected = null; render(); return; }
   if (state.mode === "yuz") return playerDiscard101(finish);
   if (state.mode === "amerikan") return playerDiscardAmerikan(finish);
   const id = state.selected;
@@ -1017,10 +1068,11 @@ function nextTurn() {
   state.turn = (state.turn + 1) % 4;
   state.ply = (state.ply || 0) + 1;
   state.phase = "draw";
-  state.drawPick = { wall: false, seats: [], gosterge: false };
+  state.drawPick = freshPick();
+  if (isBot(state.turn)) later(aiTurn, 700);
+  else if (state.turn === 0) log("Sıra sende. Desteye ya da soldaki taşa bas.");
+  else log((NAMES[state.turn] || "Rakip") + " oynuyor.");
   render();
-  if (state.turn !== 0 && !(state.onlineHumans || []).includes(state.turn)) setTimeout(aiTurn, 3000);
-  else log("Sıra sende. Desteye ya da soldaki taşa bas.");
 }
 
 function endEmpty() {
@@ -1042,7 +1094,7 @@ function endEmpty() {
   }
   log("Deste bitti, kimse bitiremedi. Puan değişmez. Yeni el…");
   render();
-  setTimeout(newRound, 1400);
+  later(newRound, 1400);
 }
 
 function finishRound(winner, result) {
@@ -1078,19 +1130,31 @@ function totalListHtml() {
     return `<li><span class="name-chip">${r.n}</span><span style="color:${color}">${r.s}</span></li>`;
   }).join("") + `</ol>`;
 }
-function showModal(title, html) {
+function showModal(title, html, local) {
   document.getElementById("modalTitle").textContent = title;
   document.getElementById("modalBody").innerHTML = html;
   document.getElementById("modal").classList.add("show");
+  // End-of-hand results are also sent to the other people at an online table.
+  if (!local && mp.role === "host" && state.phase === "over") mp.modal = { id: ++mp.modalSeq, title, html };
 }
+function showRules(title, html) { showModal(title, html, true); }
 document.getElementById("modalClose").onclick = () => {
   document.getElementById("modal").classList.remove("show");
+  if (mpGuest()) return;
   if (state.phase === "over") {
     if (state.mode === "duz" && state.scores.some(s => s <= 0)) {
       const best = Math.min(...state.scores);
       const names = NAMES.filter((_, i) => state.scores[i] === best).join(", ");
       log("Maç bitti. En düşük puanla " + names + " kazandı: " + best + ".");
       state.scores = [20, 20, 20, 20];
+      state.dealer = 0;
+    }
+    if (state.mode === "batak" && state.batak && state.batak.round >= 11) {
+      const best = Math.max(...state.scores);
+      const names = NAMES.filter((_, i) => state.scores[i] === best).join(", ");
+      log("Batak maçı bitti. " + names + " kazandı: " + best + ".");
+      state.scores = [0, 0, 0, 0];
+      state.batak.round = 0;
       state.dealer = 0;
     }
     newRound();
@@ -1105,7 +1169,7 @@ document.getElementById("scoresBtn").onclick = () => {
   document.getElementById("scorePanel").hidden = false;
 };
 document.getElementById("scoreClose").onclick = () => document.getElementById("scorePanel").hidden = true;
-document.getElementById("rulesBtn").onclick = () => state.mode === "yuz" ? show101Rules() : state.mode === "amerikan" ? showAmerikanRules() : showModal("Bizbize Okey nasıl oynanır", `
+document.getElementById("rulesBtn").onclick = () => state.mode === "yuz" ? show101Rules() : state.mode === "amerikan" ? showAmerikanRules() : state.mode === "batak" ? showBatakRules() : showRules("Bizbize Okey nasıl oynanır", `
   <ul>
     <li>106 taş: kırmızı, sarı, mavi ve siyahta 1–13, her birinden iki tane, artı iki sahte okey.</li>
     <li>Açık gösterge okeyi belirler: aynı renk, bir üst sayı (13, 1 olur). İki gerçek kopya da jokerdir.</li>
@@ -1133,21 +1197,22 @@ function moveSelectedTo(idx) {
   state.selected = state.picked.at(-1) || null;
   render();
 }
-document.getElementById("stockPile").onclick = onStock;
+document.getElementById("stockPile").onclick = () => onStock();
 const drawBtnEl = document.getElementById("drawBtn"); if (drawBtnEl) drawBtnEl.onclick = onStock;
-document.getElementById("doneDrawBtn").onclick = amerikanFinishDraw;
+document.getElementById("doneDrawBtn").onclick = () => amerikanFinishDraw();
 const takeBtnEl = document.getElementById("takeBtn"); if (takeBtnEl) takeBtnEl.onclick = () => onDiscardPile(prevOf(0));
 document.getElementById("discardBtn").onclick = () => playerDiscard(false);
-document.getElementById("openBtn").onclick = openSelected;
+document.getElementById("openBtn").onclick = () => openSelected();
 const addBtnEl = document.getElementById("addBtn"); if (addBtnEl) addBtnEl.onclick = () => log("Eklemek için taşları seç, sonra açık pere bas.");
 document.getElementById("modes").onclick = (e) => {
   const btn = e.target.closest("button");
   if (!btn) return;
+  gen++;
   state.mode = btn.dataset.mode;
   state.amerikanEl = 0;
+  state.batak = null;
   document.body.classList.toggle("mode-101", state.mode !== "duz");
   document.body.classList.toggle("duz-hand", false);
-  document.getElementById("modes").hidden = true;
   if (mp.role === "local") seatTable(mp.hero);
   else showRoom();
 };
@@ -1173,6 +1238,7 @@ function startBatak() {
   const deck = makeCards();
   state.batak.hands = [0,1,2,3].map(() => deck.splice(0, 13).sort((a,b)=> a.suit.localeCompare(b.suit) || rankVal(a)-rankVal(b)));
   state.batak.trump = null;
+  state.batak.trumpBroken = false;
   state.batak.bids = [null,null,null,null];
   state.batak.passed = [false,false,false,false];
   state.batak.high = 3;
@@ -1186,7 +1252,7 @@ function startBatak() {
   state.turn = state.batak.turn;
   log("Batak " + state.batak.round + "/11. İhale. En az 4.");
   render();
-  if (state.batak.turn !== 0) setTimeout(aiBatak, 3000);
+  if (isBot(state.batak.turn)) later(aiBatak, 500);
 }
 function beats(card, current, lead, trump) {
   if (!current) return true;
@@ -1198,11 +1264,16 @@ function currentBest(trick, trump) {
   return trick.find(t => t.player === trickWinner(trick, trump)).card;
 }
 function legalCards(p) {
-  const hand = state.batak.hands[p];
-  const trick = state.batak.trick;
-  if (!trick.length) return hand;
+  const b = state.batak;
+  const hand = b.hands[p];
+  const trick = b.trick;
+  const trump = b.trump;
+  if (!trick.length) {
+    // Koz kırılmadan kozla başlanmaz (elde yalnız koz kaldıysa başlanabilir).
+    const plain = hand.filter(c => c.suit !== trump);
+    return !b.trumpBroken && plain.length ? plain : hand;
+  }
   const lead = trick[0].card.suit;
-  const trump = state.batak.trump;
   const follow = hand.filter(c => c.suit === lead);
   const trumps = hand.filter(c => c.suit === trump);
   let allowed = follow.length ? follow : (trumps.length ? trumps : hand);
@@ -1236,20 +1307,23 @@ function endBatakRound() {
     state.scores[i] += deltas[i];
   }
   const done = b.round >= 11;
-  showModal("Batak " + b.round + "/11 bitti", `${handLine(NAMES.map((n,i)=>({n,v:deltas[i]})))}${totalListHtml()}${done?"<p>11 tur bitti. En yüksek puan kazanır.</p>":"<p>Bunu kapatınca yeni tur.</p>"}`);
   state.phase = "over";
+  b.phase = "over";
+  showModal("Batak " + b.round + "/11 bitti", `${handLine(NAMES.map((n,i)=>({n,v:deltas[i]})))}${totalListHtml()}${done?"<p>11 tur bitti. En yüksek puan kazanır. Kapatınca yeni maç başlar.</p>":"<p>Bunu kapatınca yeni tur.</p>"}`);
   state.dealer = (state.dealer + 1) % 4;
-  if (done) { state.batak.round = 0; log("Batak bitti."); }
+  if (done) log("Batak bitti.");
   render();
 }
 function playBatakCard(p, id) {
   const b = state.batak;
-  if (b.phase !== "play" || b.turn !== p) return;
+  if (!b || b.phase !== "play" || b.turn !== p || b.trick.length >= 4) return;
   const legal = legalCards(p);
-  const card = legal.find(c => c.id === id) || state.batak.hands[p].find(c => c.id === id);
-  if (!card || !legal.some(c => c.id === card.id)) return log("Bu kağıt oynanmaz.");
+  const card = legal.find(c => c.id === id);
+  if (!card) return log("Bu kağıt oynanmaz.");
+  if (p === 0 && mpGuest()) return guestAct("play", [id]);
   b.hands[p] = b.hands[p].filter(c => c.id !== card.id);
   b.trick.push({ player: p, card });
+  if (card.suit === b.trump) b.trumpBroken = true;
   if (b.trick.length === 4) {
     const w = trickWinner(b.trick, b.trump);
     b.won[w]++;
@@ -1258,53 +1332,57 @@ function playBatakCard(p, id) {
     b.lead = w;
     state.turn = w;
     render();
-    setTimeout(() => {
+    later(() => {
       if (state.mode !== "batak" || !state.batak) return;
       state.batak.trick = [];
       if (state.batak.hands[0].length === 0) return endBatakRound();
       render();
-      if (state.batak.turn !== 0) setTimeout(aiBatak, 3000);
+      if (isBot(state.batak.turn)) later(aiBatak, 350);
     }, 2000);
     return;
   }
   b.turn = (p + 1) % 4;
   state.turn = b.turn;
   render();
-  if (b.turn !== 0 && b.phase === "play") setTimeout(aiBatak, 3000);
+  if (isBot(b.turn) && b.phase === "play") later(aiBatak, 450);
 }
 function chooseTrump(suit) {
   const b = state.batak;
-  if (b.phase !== "trump" || b.bidder !== 0) return;
+  if (!b || b.phase !== "trump" || b.bidder !== 0) return;
+  if (mpGuest()) return guestAct("trump", [suit]);
   b.trump = suit;
   b.phase = "play";
   b.turn = b.bidder;
   state.turn = b.turn;
   log("Koz: " + suit + ". " + NAMES[b.turn] + " başlıyor.");
   render();
-  if (b.turn !== 0) setTimeout(aiBatak, 3000);
+  if (isBot(b.turn)) later(aiBatak, 450);
 }
 function placeBid(p, n) {
   const b = state.batak;
-  if (b.phase !== "bid" || b.turn !== p) return;
+  if (!b || b.phase !== "bid" || b.turn !== p) return;
+  if (p === 0 && mpGuest()) return guestAct("bid", [n]);
   if (n && n > b.high) { b.high = n; b.bidder = p; b.bids[p] = n; }
   else b.passed[p] = true;
   const active = [0,1,2,3].filter(i => !b.passed[i]);
-  if (!active.length) { b.bidder = p; b.high = 4; b.phase = "trump"; log(NAMES[p] + " 4 ile aldı."); if (p !== 0) { b.trump = bestTrump(p); b.phase = "play"; b.turn = p; log("Koz: " + b.trump + ". " + NAMES[p] + " başlıyor."); } }
-  else if (b.bidder != null && active.length === 1 && active[0] === b.bidder) {
+  let won = null;
+  if (!active.length) { b.bidder = p; b.high = 4; won = p; log(NAMES[p] + " 4 ile aldı."); }
+  else if (b.bidder != null && active.length === 1 && active[0] === b.bidder) { won = b.bidder; log(NAMES[b.bidder] + " ihaleyi aldı: " + b.high); }
+  else if (b.high >= 13 && b.bidder != null) { won = b.bidder; log(NAMES[b.bidder] + " ihaleyi aldı: 13"); }
+  if (won != null) {
     b.phase = "trump";
-    log(NAMES[b.bidder] + " ihaleyi aldı: " + b.high);
-    if (b.bidder !== 0) {
-      b.trump = bestTrump(b.bidder);
+    b.turn = won;
+    if (isBot(won)) {
+      b.trump = bestTrump(won);
       b.phase = "play";
-      b.turn = b.bidder;
-      log("Koz: " + b.trump + ". " + NAMES[b.bidder] + " başlıyor.");
+      log("Koz: " + b.trump + ". " + NAMES[won] + " başlıyor.");
     }
   } else {
     do { b.turn = (b.turn + 1) % 4; } while (b.passed[b.turn]);
   }
   state.turn = b.turn;
   render();
-  if ((b.phase === "bid" || b.phase === "play") && b.turn !== 0) setTimeout(aiBatak, 3000);
+  if ((b.phase === "bid" || b.phase === "play") && isBot(b.turn)) later(aiBatak, 450);
 }
 function suitCount(hand, suit) { return hand.filter(c => c.suit === suit).length; }
 function highCount(hand, suit) { return hand.filter(c => c.suit === suit && rankVal(c) >= 9).length; }
@@ -1321,7 +1399,7 @@ function estimateTricks(p) {
 }
 function aiBatak() {
   const b = state.batak;
-  if (!b || b.turn === 0 || state.mode !== "batak") return;
+  if (!b || state.mode !== "batak" || !isBot(b.turn)) return;
   const p = b.turn;
   if (b.phase === "bid") {
     const want = estimateTricks(p);
@@ -1329,6 +1407,7 @@ function aiBatak() {
     return;
   }
   if (b.phase === "play") {
+    if (b.trick.length >= 4) return;
     const legal = legalCards(p);
     const meBidder = p === b.bidder;
     const need = meBidder ? Math.max(0, b.high - b.won[p]) : (b.won[p] < 1 ? 1 : 0);
@@ -1349,45 +1428,56 @@ function aiBatak() {
 function renderBatak() {
   const b = state.batak;
   if (!b) return;
-  document.body.classList.add("mode-batak");
   for (let i = 0; i < 4; i++) {
-    const seat = document.getElementById("seat"+i);
-    seat.innerHTML = `<div class="seat${b.turn===i?" active":""}"><div class="seat-head">${avatarHtml(NAMES[i])}<div><div class="meta">${state.scores[i]} puan${b.won? " · "+b.won[i]+" el":""}</div></div></div></div>`;
+    renderSeat(i, b.turn === i && b.phase !== "over", state.scores[i] + " puan · " + (b.won ? b.won[i] : 0) + " el", false);
   }
-  document.getElementById("melds").innerHTML = `<div class="trick">${(b.trick||[]).map(t=>cardHtml(t.card).replace('class="card','class="card from'+t.player)).join("")}</div><div style="text-align:center;margin-top:8px">Tur ${b.round}/11 · Koz: ${b.trump||"seçilmedi"} · İhale: ${b.bidder==null?"-":NAMES[b.bidder]+" "+b.high}</div>`;
+  document.getElementById("trick").innerHTML = (b.trick || []).map(t => cardHtml(t.card).replace('class="card', 'class="card from' + t.player)).join("");
+  document.getElementById("melds").innerHTML = `<div class="batak-info">Tur ${b.round}/11 · Koz: ${b.trump ? SUIT_MARK[b.trump] + " " + b.trump : "seçilmedi"} · İhale: ${b.bidder == null ? "-" : NAMES[b.bidder] + " " + b.high}</div>`;
+  const myPlay = b.phase === "play" && b.turn === 0 && b.trick.length < 4;
+  const legalIds = new Set(myPlay ? legalCards(0).map(c => c.id) : []);
   const rack = document.getElementById("rack");
   rack.innerHTML = "";
   const line = document.createElement("div");
   line.className = "rack-row overlap";
-  (b.hands[0]||[]).forEach(c => {
+  (b.hands[0] || []).forEach(c => {
     const wrap = document.createElement("div");
     wrap.innerHTML = cardHtml(c);
     const btn = wrap.firstChild;
-    btn.onclick = () => {
-      if (b.phase === "play" && b.turn === 0) playBatakCard(0, c.id);
-    };
+    if (myPlay && !legalIds.has(c.id)) btn.classList.add("off");
+    btn.onclick = () => { if (myPlay) playBatakCard(0, c.id); };
     line.appendChild(btn);
   });
   rack.appendChild(line);
-  const bar = document.querySelector(".istaka-bar div");
-  if (bar && b.phase === "bid" && b.turn === 0) {
-    bar.innerHTML = `<div class="bidbar">${[4,5,6,7,8,9,10,11,12,13].filter(n=>n>b.high).map(n=>`<button data-bid="${n}">${n}</button>`).join("")}<button data-bid="0">Pas</button></div>`;
+  const bar = document.getElementById("batakBar");
+  if (b.phase === "bid" && b.turn === 0) {
+    bar.innerHTML = [4,5,6,7,8,9,10,11,12,13].filter(n => n > b.high).map(n => `<button data-bid="${n}">${n}</button>`).join("") + `<button data-bid="0">Pas</button>`;
     bar.querySelectorAll("button").forEach(btn => btn.onclick = () => placeBid(0, Number(btn.dataset.bid)));
-  } else if (bar && b.phase === "trump" && b.bidder === 0) {
-    bar.innerHTML = `<div class="bidbar">${SUITS.map(s=>`<button data-suit="${s}">${SUIT_MARK[s]} ${s}</button>`).join("")}</div>`;
+  } else if (b.phase === "trump" && b.bidder === 0) {
+    bar.innerHTML = SUITS.map(s => `<button data-suit="${s}">${SUIT_MARK[s]} ${s}</button>`).join("");
     bar.querySelectorAll("button").forEach(btn => btn.onclick = () => chooseTrump(btn.dataset.suit));
-  }
-  document.getElementById("turnLabel").textContent = b.phase === "bid" ? "İhale" : b.phase === "trump" ? "Koz seç" : (b.turn===0?"Sıra sende":NAMES[b.turn]+" oynuyor");
-  document.getElementById("log").textContent = document.getElementById("log").textContent;
+  } else bar.innerHTML = "";
+  document.getElementById("turnLabel").textContent = b.phase === "bid" ? (b.turn === 0 ? "İhale: teklif ver ya da pas" : NAMES[b.turn] + " ihale düşünüyor")
+    : b.phase === "trump" ? (b.bidder === 0 ? "Koz seç" : NAMES[b.bidder] + " koz seçiyor")
+    : b.phase === "over" ? "Tur bitti" : (b.turn === 0 ? "Sıra sende" : NAMES[b.turn] + " oynuyor");
 }
-const _renderMain = render;
-render = function () { if (state.mode === "batak") return renderBatak(); document.body.classList.remove("mode-batak"); return _renderMain(); };
+function showBatakRules() {
+  showRules("İhaleli Batak nasıl oynanır", `
+    <ul>
+      <li>52 kağıt, herkese 13 kağıt. 11 tur oynanır, en yüksek puan kazanır.</li>
+      <li>İhale en az 4'tür. En yüksek teklifi veren kozu seçer ve ilk eli başlatır. Herkes pas derse son pas diyen 4 ile alır.</li>
+      <li>Yerdeki rengi takip etmek zorunludur. O renk yoksa koz atmak zorunludur. Eldeki taşla yerdekini geçebiliyorsan geçmek zorunludur.</li>
+      <li>Koz kırılmadan (biri koz atmadan) kozla el başlatılamaz; elde yalnız koz kaldıysa başlatılabilir.</li>
+      <li>İhaleyi alan, sözünü tutarsa ihale kadar puan alır, tutamazsa ihale kadar kaybeder.</li>
+      <li>Diğerleri aldıkları el kadar puan alır. Hiç el alamayan "batar" ve ihale kadar kaybeder.</li>
+    </ul>
+  `);
+}
 
 
 document.getElementById("newBtn").onclick = () => { if (!NAMES[0]) return; state.phase = "over"; newRound(); };
 document.getElementById("changeBtn").onclick = () => openPicker();
 
-const mp = { role: "local", hero: "", seat: 0, abs: 0, code: "", ws: null, names: [] };
+const mp = { role: "local", hero: "", seat: 0, abs: 0, code: "", ws: null, names: [], rot: 0, note: null, modal: null, modalSeq: 0, seenModal: 0, noteSeq: 0, seenNote: 0 };
 function mpUrl() {
   const q = new URLSearchParams(location.search).get("ws");
   if (q) return q;
@@ -1396,10 +1486,18 @@ function mpUrl() {
 }
 function mpSend(msg) { if (mp.ws && mp.ws.readyState === 1) mp.ws.send(JSON.stringify(msg)); }
 function mpConnect(done) {
+  if (mp.ws) { try { mp.ws.onclose = null; mp.ws.close(); } catch {} }
+  const status = document.getElementById("roomStatus");
+  if (location.protocol === "file:" && !new URLSearchParams(location.search).get("ws")) {
+    status.textContent = "Çok oyunculu için oyunu sunucudan aç (npm start).";
+    return;
+  }
+  status.textContent = "Bağlanıyor…";
   mp.ws = new WebSocket(mpUrl());
-  mp.ws.onopen = done;
-  mp.ws.onmessage = (e) => mpOn(JSON.parse(e.data));
-  mp.ws.onerror = () => { const s = document.getElementById("roomStatus"); if (s) s.textContent = "Sunucuya bağlanılamadı."; };
+  mp.ws.onopen = () => { status.textContent = ""; done(); };
+  mp.ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch { return; } mpOn(m); };
+  mp.ws.onerror = () => { status.textContent = "Sunucuya bağlanılamadı."; };
+  mp.ws.onclose = () => { if (mp.role !== "local") log("Masa bağlantısı koptu. Sayfayı yenileyip yeniden katıl."); };
 }
 function renderLobby() {
   const box = document.getElementById("lobby");
@@ -1407,58 +1505,155 @@ function renderLobby() {
   box.hidden = false;
   document.getElementById("netBox").hidden = true;
   document.getElementById("roomCodeBig").textContent = mp.code || "----";
-  document.getElementById("lobbyList").innerHTML = (mp.players || []).map(p => `<li>Koltuk ${p.seat + 1}: ${p.name}${p.seat === 0 ? " · kurucu" : ""}</li>`).join("") || "<li>Oyuncular bekleniyor.</li>";
+  document.getElementById("lobbyList").innerHTML = (mp.players || []).map(p => `<li>Koltuk ${p.seat + 1}: ${escapeHtml(p.name)}${p.seat === 0 ? " · kurucu" : ""}</li>`).join("") || "<li>Oyuncular bekleniyor.</li>";
   const btn = document.getElementById("startGameBtn");
   btn.disabled = mp.role !== "host";
   btn.textContent = mp.role === "host" ? "Oyunu başlat" : "Kurucu başlatacak";
 }
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 function mpOn(msg) {
-  if (msg.t === "error") return document.getElementById("roomStatus").textContent = msg.text;
+  if (msg.t === "error") {
+    document.getElementById("roomStatus").textContent = msg.text;
+    if (state.started) log(msg.text);
+    return;
+  }
   if (msg.t === "room" || msg.t === "roster") {
     if (msg.code) mp.code = msg.code;
     if (msg.seat != null) mp.abs = msg.seat;
     if (msg.players) mp.players = msg.players;
     if (msg.host) mp.role = "host";
     else if (msg.t === "room") mp.role = "guest";
-    renderLobby();
+    if (!state.started) renderLobby();
+    else if (mp.role === "host") {
+      // Someone left or joined mid-game: their seat is played by the computer (or by them again).
+      const before = state.onlineHumans || [];
+      state.onlineHumans = mp.players.map(p => p.seat);
+      if (before.includes(state.turn) && !state.onlineHumans.includes(state.turn)) {
+        if (state.mode === "batak") later(aiBatak, 600); else later(aiTurn, 600);
+      }
+      render();
+    }
   }
   if (msg.t === "state" && mp.role === "guest") mpApply(msg.state, msg.names);
-  if (msg.t === "act" && mp.role === "host") mpHostAct(msg.seat, msg.act, msg);
-  if (msg.t === "signal") onSignal(msg);
+  if (msg.t === "act" && mp.role === "host") mpHostAct(msg.seat, msg);
+  if (msg.t === "signal") onSignal(msg).catch(() => {});
   if (msg.t === "talk") { rtc.talker = msg.talker; if (rtc.stream) rtc.stream.getAudioTracks().forEach(tr => tr.enabled = rtc.talker === mp.abs); setMic(rtc.talker === mp.abs); }
   if (msg.t === "room" || msg.t === "roster") linkHumans();
 }
+// Turn the whole table so that seat k sits at the bottom (index 0).
+// Used by guests to see the table from their own chair, and by the host to run a guest's move.
+function rotateState(k) {
+  k = ((k % 4) + 4) % 4;
+  if (!k) return;
+  const rot = (arr) => Array.isArray(arr) && arr.length === 4 ? arr.map((_, i) => arr[(i + k) % 4]) : arr;
+  const seat = (s) => (s == null || s < 0) ? s : (s - k + 4) % 4;
+  ["players", "discards", "opened", "scores", "openedAt", "taken"].forEach(f => { if (state[f]) state[f] = rot(state[f]); });
+  NAMES = rot(NAMES);
+  state.turn = seat(state.turn);
+  state.starter = seat(state.starter);
+  state.dealer = seat(state.dealer);
+  (state.melds || []).forEach(m => { m.owner = seat(m.owner); });
+  const b = state.batak;
+  if (b && b.hands) {
+    ["hands", "bids", "passed", "won"].forEach(f => { if (b[f]) b[f] = rot(b[f]); });
+    b.turn = seat(b.turn);
+    b.lead = seat(b.lead);
+    b.bidder = seat(b.bidder);
+    (b.trick || []).forEach(t => { t.player = seat(t.player); });
+  }
+}
 function mpSnapshot() {
-  return JSON.parse(JSON.stringify({ scores: state.scores, round: state.round, dealer: state.dealer, players: state.players, wall: state.wall, discard: state.discard, discards: state.discards, indicator: state.indicator, okey: state.okey, turn: state.turn, phase: state.phase, starter: state.starter, mode: state.mode, amerikanEl: state.amerikanEl, opened: state.opened, melds: state.melds, ply: state.ply, gostergeLive: state.gostergeLive, drawPick: state.drawPick }));
+  return JSON.parse(JSON.stringify({ scores: state.scores, round: state.round, dealer: state.dealer, players: state.players, wall: state.wall, discards: state.discards, indicator: state.indicator, okey: state.okey, turn: state.turn, phase: state.phase, starter: state.starter, mode: state.mode, amerikanEl: state.amerikanEl, opened: state.opened, openedAt: state.openedAt, melds: state.melds, ply: state.ply, gostergeLive: state.gostergeLive, batak: state.batak, note: state.note || null, modal: mp.modal }));
 }
 function mpBroadcast() {
-  if (mp.role !== "host") return;
+  if (mp.role !== "host" || mp.rot) return;
   mpSend({ t: "state", state: mpSnapshot(), names: NAMES });
+}
+// Keep the guest's own tile arrangement when a new table state arrives.
+function syncSlots() {
+  const hand = state.players[0] || [];
+  const ids = new Set(hand.map(t => t.id));
+  if (!state.slots || state.slots.length !== 27) state.slots = Array(27).fill(null);
+  state.slots = state.slots.map(id => (id && ids.has(id)) ? id : null);
+  hand.forEach(t => { if (!state.slots.includes(t.id)) placeOnRack(t); });
 }
 function mpApply(snap, names) {
   hideSteps();
+  const wasMyDraw = state.started && state.turn === 0 && state.phase === "draw";
+  const keep = { picked: state.picked || [], selected: state.selected, drawPick: state.drawPick, slots: state.slots };
+  const note = snap.note, modal = snap.modal;
+  delete snap.note; delete snap.modal;
   state.started = true;
-  const me = mp.abs;
-  const rot = (arr) => arr.map((_, i) => arr[(i + me) % 4]);
   Object.assign(state, snap);
-  state.players = rot(snap.players);
-  state.scores = rot(snap.scores);
-  state.discards = rot(snap.discards);
-  state.opened = rot(snap.opened);
-  state.turn = (snap.turn - me + 4) % 4;
-  state.dealer = (snap.dealer - me + 4) % 4;
-  state.starter = (snap.starter - me + 4) % 4;
-  NAMES = rot(names);
-  state.selected = null;
-  rebuildSlots();
+  state.discard = [];
+  NAMES = names.slice();
+  rotateState(mp.abs);
+  state.slots = keep.slots;
+  syncSlots();
+  state.picked = keep.picked.filter(id => tileById(id));
+  state.selected = keep.selected && tileById(keep.selected) ? keep.selected : null;
+  const myDraw = state.turn === 0 && state.phase === "draw";
+  state.drawPick = myDraw && wasMyDraw && keep.drawPick ? keep.drawPick : freshPick();
+  if (note && note.n !== mp.seenNote) {
+    mp.seenNote = note.n;
+    if (note.seat === mp.abs && note.text) log(note.text);
+  }
+  if (myDraw && !wasMyDraw) log("Sıra sende.");
+  if (modal && modal.id !== mp.seenModal) {
+    mp.seenModal = modal.id;
+    showModal(modal.title, modal.html, true);
+  }
   render();
 }
-function mpAct(act, extra) {
-  mpSend(Object.assign({ t: "act", seat: mp.abs, act }, extra || {}));
-  log("Hamle masaya gitti.");
+// A guest sends the move to the host; the host checks and plays it.
+function guestAct(act, args) {
+  mpSend({ t: "act", seat: mp.abs, act, args: args || [], picked: state.picked, selected: state.selected, drawPick: state.drawPick });
 }
 function mpGuest() { return mp.role === "guest"; }
-const rtc = { peers: {}, stream: null, remote: {}, ice: {}, talker: null };
+const GUEST_ACTIONS = {
+  stock: () => onStock(),
+  take: (owner) => onDiscardPile(owner),
+  finishDraw: () => amerikanFinishDraw(),
+  open: () => openSelected(),
+  add: (i) => addToMeld(i),
+  discard: (finish) => playerDiscard(!!finish),
+  bid: (n) => placeBid(0, n),
+  trump: (s) => chooseTrump(s),
+  play: (id) => playBatakCard(0, id)
+};
+function mpHostAct(seat, msg) {
+  if (!state.started || state.phase === "over" && state.mode !== "batak") return;
+  if (!(state.onlineHumans || []).includes(seat) || seat === 0) return;
+  const fn = GUEST_ACTIONS[msg.act];
+  if (!fn) return;
+  const turn = state.mode === "batak" && state.batak ? state.batak.turn : state.turn;
+  if (turn !== seat) return;
+  const saved = { slots: state.slots, picked: state.picked, selected: state.selected, drawPick: state.drawPick };
+  rotateState(seat);
+  mp.rot = seat;
+  mp.note = null;
+  try {
+    rebuildSlots();
+    state.picked = Array.isArray(msg.picked) ? msg.picked : [];
+    state.selected = msg.selected || null;
+    state.drawPick = msg.drawPick && Array.isArray(msg.drawPick.seats) ? msg.drawPick : freshPick();
+    fn(...(Array.isArray(msg.args) ? msg.args : []));
+  } catch (err) {
+    console.error(err);
+  } finally {
+    rotateState(4 - seat);
+    mp.rot = 0;
+    state.slots = saved.slots;
+    state.picked = saved.picked.filter(id => tileById(id));
+    state.selected = saved.selected && tileById(saved.selected) ? saved.selected : null;
+    state.drawPick = state.turn === 0 && state.phase === "draw" ? saved.drawPick : freshPick();
+  }
+  state.note = { seat, text: mp.note, n: ++mp.noteSeq };
+  if (state.turn === 0 && state.phase !== "over") log(state.mode === "batak" ? "Sıra sende." : "Sıra sende. Desteye ya da soldaki taşa bas.");
+  else if (state.phase !== "over") log((NAMES[seat] || "Oyuncu") + " oynadı.");
+  render();
+}
+const rtc = { peers: {}, stream: null, mediaP: null, remote: {}, ice: {}, talker: null };
 const ICE = { iceServers: [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:openrelay.metered.ca:80" },
@@ -1470,23 +1665,28 @@ function seatBox(abs) {
   const view = (abs - (mp.abs || 0) + 4) % 4;
   return document.querySelector("#seat" + view + " .avatar");
 }
-async function ensureMedia() {
-  if (rtc.stream) return rtc.stream;
-  rtc.stream = await navigator.mediaDevices.getUserMedia({
-    audio: true,
-    video: { width: { ideal: 854 }, height: { ideal: 480 }, facingMode: "user" }
-  });
-  rtc.stream.getAudioTracks().forEach(tr => tr.enabled = false);
-  return rtc.stream;
+function ensureMedia() {
+  if (rtc.stream) return Promise.resolve(rtc.stream);
+  if (!rtc.mediaP) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return Promise.reject(new Error("no media"));
+    rtc.mediaP = navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: { width: { ideal: 854 }, height: { ideal: 480 }, facingMode: "user" }
+    }).then(stream => {
+      stream.getAudioTracks().forEach(tr => tr.enabled = false);
+      rtc.stream = stream;
+      return stream;
+    }).catch(err => { rtc.mediaP = null; throw err; });
+  }
+  return rtc.mediaP;
 }
 function attachVideo(box, stream, muted) {
   if (!box || !stream) return;
   let video = box.querySelector("video");
   if (!video) { video = document.createElement("video"); video.autoplay = true; video.playsInline = true; video.setAttribute("playsinline", ""); box.appendChild(video); }
-  if (video.srcObject !== stream) video.srcObject = stream;
+  if (video.srcObject !== stream) { video.srcObject = stream; video.play().catch(() => {}); }
   video.muted = muted;
   box.classList.add("live");
-  video.play().catch(() => {});
 }
 function showStream(abs, stream) {
   if (stream) rtc.remote[abs] = stream;
@@ -1494,7 +1694,8 @@ function showStream(abs, stream) {
   attachVideo(seatBox(abs), rtc.remote[abs], false);
 }
 function restickStreams() {
-  attachVideo(document.querySelector("#seat0 .avatar"), rtc.stream, true);
+  const cam = rtc.stream && rtc.stream.getVideoTracks()[0];
+  if (cam && cam.enabled) attachVideo(document.querySelector("#seat0 .avatar"), rtc.stream, true);
   Object.keys(rtc.remote).forEach(seat => {
     seat = Number(seat);
     if (seat !== mp.abs) attachVideo(seatBox(seat), rtc.remote[seat], false);
@@ -1505,24 +1706,30 @@ async function flushIce(pc, seat) {
   rtc.ice[seat] = [];
   for (const c of queued) await pc.addIceCandidate(c).catch(() => {});
 }
-async function connectPeer(seat) {
-  if (seat === mp.abs || rtc.peers[seat]) return rtc.peers[seat];
-  await ensureMedia();
-  const pc = new RTCPeerConnection(ICE);
-  rtc.stream.getTracks().forEach(tr => pc.addTrack(tr, rtc.stream));
-  pc.onicecandidate = (e) => { if (e.candidate) mpSend({ t: "signal", to: seat, data: { ice: e.candidate } }); };
-  pc.ontrack = (e) => showStream(seat, e.streams[0] || new MediaStream([e.track]));
-  rtc.peers[seat] = pc;
-  if (mp.abs < seat) {
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    mpSend({ t: "signal", to: seat, data: { sdp: pc.localDescription } });
+// One connection per seat; the promise is stored right away so two messages can't create two connections.
+function connectPeer(seat) {
+  if (seat === mp.abs) return Promise.resolve(null);
+  if (!rtc.peers[seat]) {
+    rtc.peers[seat] = (async () => {
+      await ensureMedia();
+      const pc = new RTCPeerConnection(ICE);
+      rtc.stream.getTracks().forEach(tr => pc.addTrack(tr, rtc.stream));
+      pc.onicecandidate = (e) => { if (e.candidate) mpSend({ t: "signal", to: seat, data: { ice: e.candidate } }); };
+      pc.ontrack = (e) => showStream(seat, e.streams[0] || new MediaStream([e.track]));
+      if (mp.abs < seat) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        mpSend({ t: "signal", to: seat, data: { sdp: pc.localDescription } });
+      }
+      return pc;
+    })();
+    rtc.peers[seat].catch(() => { delete rtc.peers[seat]; });
   }
-  return pc;
+  return rtc.peers[seat];
 }
 async function onSignal(msg) {
-  await ensureMedia();
   const pc = await connectPeer(msg.from);
+  if (!pc) return;
   if (msg.data.sdp) {
     await pc.setRemoteDescription(msg.data.sdp);
     await flushIce(pc, msg.from);
@@ -1537,8 +1744,20 @@ async function onSignal(msg) {
   }
 }
 function linkHumans() {
+  const seats = new Set((mp.players || []).map(p => p.seat));
+  // Close video links to people who left.
+  Object.keys(rtc.peers).forEach(s => {
+    s = Number(s);
+    if (!seats.has(s)) {
+      Promise.resolve(rtc.peers[s]).then(pc => pc && pc.close()).catch(() => {});
+      delete rtc.peers[s];
+      delete rtc.remote[s];
+      const box = seatBox(s);
+      if (box) box.classList.remove("live");
+    }
+  });
   (mp.players || []).forEach(p => { if (p.seat !== mp.abs) connectPeer(p.seat).catch(() => {}); });
-  if (rtc.stream) { rtc.remote[mp.abs] = rtc.stream; restickStreams(); }
+  if (rtc.stream) restickStreams();
 }
 function setMic(on) {
   const btn = document.getElementById("micBtn");
@@ -1548,14 +1767,6 @@ function setMic(on) {
   btn.classList.toggle("live", on && rtc.talker === mp.abs);
 }
 
-function mpHostAct(seat, act, msg) {
-  if (state.turn !== seat) return;
-  if (act === "stock") { if (state.wall.length) drawFromWall(seat); state.phase = "discard"; }
-  if (act === "take") { const t = takeFromPile(seat, prevOf(seat)); if (t) state.phase = "discard"; }
-  if (act === "discard") { discardTile(seat, msg.id); nextTurn(); }
-  render();
-  mpBroadcast();
-}
 document.getElementById("localBtn").onclick = () => { mp.role = "local"; showModes(); };
 document.getElementById("onlineBtn").onclick = () => { mp.role = "online"; showModes(); };
 document.getElementById("hostBtn").onclick = () => mpConnect(() => { mp.role = "host"; mpSend({ t: "create", name: mp.hero || "Kurucu" }); });
@@ -1577,15 +1788,13 @@ document.getElementById("startGameBtn").onclick = () => {
   state.onlineHumans = seated.map(p => p.seat);
   state.scores = state.mode === "duz" ? [20, 20, 20, 20] : [0, 0, 0, 0];
   state.amerikanEl = 0;
+  state.batak = null;
   state.dealer = 0;
   state.round = 0;
   state.started = true;
   hideSteps();
   newRound();
-  mpBroadcast();
 };
-const _render = render;
-render = function () { _render(); mpBroadcast(); restickStreams(); };
 
 const camBtn = document.getElementById("camBtn");
 camBtn.onclick = async () => {
@@ -1595,23 +1804,19 @@ camBtn.onclick = async () => {
   track.enabled = !track.enabled;
   camBtn.textContent = track.enabled ? "📷" : "🚫";
   const box = document.querySelector("#seat0 .avatar");
-  if (box) box.classList.toggle("live", track.enabled);
+  if (box) {
+    if (track.enabled) attachVideo(box, rtc.stream, true);
+    else box.classList.remove("live");
+  }
 };
 const micBtn = document.getElementById("micBtn");
 micBtn.addEventListener("pointerdown", async (e) => {
   e.preventDefault();
-  if (mp.role === "local") return;
+  if (mp.role === "local") return log("Mikrofon yalnız çok oyunculu masada çalışır.");
   try { await ensureMedia(); } catch { return log("Kamera veya mikrofon izni yok."); }
   mpSend({ t: "talk", on: true });
 });
 ["pointerup","pointercancel","pointerleave"].forEach(ev => micBtn.addEventListener(ev, () => { if (mp.role !== "local") mpSend({ t: "talk", on: false }); }));
-
-const _onStock = onStock;
-onStock = function () { if (mpGuest()) return mpAct("stock"); return _onStock(); };
-const _onDiscardPile = onDiscardPile;
-onDiscardPile = function (owner) { if (mpGuest()) return mpAct("take"); return _onDiscardPile(owner); };
-const _playerDiscard = playerDiscard;
-playerDiscard = function (finish) { if (mpGuest()) return mpAct("discard", { id: state.selected }); return _playerDiscard(finish); };
 
 function endIntro() {
   const intro = document.getElementById("intro");
@@ -1664,6 +1869,9 @@ function showRoom() {
 function seatTable(hero) {
   const rest = shuffle(CAST.map(c => c.name).filter(n => n !== hero));
   NAMES = [hero, rest[0], rest[1], rest[2]];
+  gen++;
+  state.onlineHumans = [];
+  state.batak = null;
   state.scores = state.mode === "duz" ? [20, 20, 20, 20] : [0, 0, 0, 0];
   state.amerikanEl = 0;
   state.dealer = 0;
@@ -1713,8 +1921,10 @@ function isExactRun(tiles, len) {
   if (!color || faces.some(f => !f.joker && f.color !== color)) return false;
   const nums = faces.filter(f => !f.joker).map(f => f.num).sort((a,b)=>a-b);
   if (new Set(nums).size !== nums.length) return false;
-  const holes = nums.length ? nums[nums.length - 1] - nums[0] + 1 - nums.length : 0;
-  return holes === faces.filter(f => f.joker).length && nums[nums.length - 1] - nums[0] + 1 <= len;
+  const span = nums[nums.length - 1] - nums[0] + 1;
+  const holes = span - nums.length;
+  // Jokers fill the gaps; any jokers left over extend the run at either end.
+  return holes <= faces.filter(f => f.joker).length && span <= len && len <= 13;
 }
 function isExactSet(tiles, len) {
   if (tiles.length !== len) return false;
@@ -1726,46 +1936,53 @@ function isExactSet(tiles, len) {
 }
 function isExactPairs(tiles, count) {
   if (tiles.length !== count * 2) return false;
-  const left = tiles.slice();
-  for (let n = 0; n < count; n++) {
-    const a = left.pop();
-    const fa = faceOf(a);
-    const idx = left.findIndex(t => {
-      const f = faceOf(t);
-      return f.joker || fa.joker || (f.color === fa.color && f.num === fa.num);
-    });
-    if (idx < 0) return false;
-    left.splice(idx, 1);
+  // Identical tiles pair up first; every leftover single needs a joker. Spare jokers pair with each other.
+  let jokers = 0;
+  const buckets = new Map();
+  for (const t of tiles) {
+    const f = faceOf(t);
+    if (f.joker) { jokers++; continue; }
+    const k = f.color + f.num;
+    buckets.set(k, (buckets.get(k) || 0) + 1);
   }
-  return true;
+  let singles = 0;
+  for (const n of buckets.values()) singles += n % 2;
+  return singles <= jokers;
 }
 function matchContract(tiles) {
   const parts = contract().parts;
   if (parts[0][0] === "duz") return null;
-  const groups = [];
-  let pool = tiles.slice();
-  for (const [kind, n] of parts) {
-    let found = null;
+  const total = parts.reduce((n, [kind, k]) => n + (kind === "pairs" ? k * 2 : k), 0);
+  if (tiles.length !== total) return null;
+  function go(i, pool, acc) {
+    if (i >= parts.length) return pool.length ? null : acc;
+    const [kind, n] = parts[i];
     if (kind === "pairs") {
       if (!isExactPairs(pool, n)) return null;
-      for (let i = 0; i < n; i++) groups.push(pool.splice(0, 2));
-      continue;
+      return go(i + 1, [], acc.concat(pairUp(pool)));
     }
-    const size = n;
-    for (let i = 0; i < pool.length && !found; i++) {
-      const combos = kind === "run" ? [pool.filter(t => faceOf(t).joker || faceOf(t).color === faceOf(pool[i]).color)] : [pool.filter(t => faceOf(t).joker || faceOf(t).num === faceOf(pool[i]).num)];
-      const cand = combos[0].slice(0, size);
-      if (cand.length === size && (kind === "run" ? isExactRun(cand, size) : isExactSet(cand, size))) found = cand;
+    for (const combo of combinations(pool, n)) {
+      if (!(kind === "run" ? isExactRun(combo, n) : isExactSet(combo, n))) continue;
+      const res = go(i + 1, pool.filter(t => !combo.includes(t)), acc.concat([combo]));
+      if (res) return res;
     }
-    if (!found) {
-      const trial = pool.slice(0, size);
-      if (trial.length === size && (kind === "run" ? isExactRun(trial, size) : isExactSet(trial, size))) found = trial;
-    }
-    if (!found) return null;
-    groups.push(found);
-    pool = pool.filter(t => !found.includes(t));
+    return null;
   }
-  return pool.length ? null : groups;
+  return go(0, tiles.slice(), []);
+}
+// Split tiles into real pairs (jokers fill in), for showing them on the table.
+function pairUp(tiles) {
+  const left = tiles.slice();
+  const out = [];
+  while (left.length) {
+    const a = left.shift();
+    const fa = faceOf(a);
+    let idx = left.findIndex(t => !fa.joker && !faceOf(t).joker && faceOf(t).color === fa.color && faceOf(t).num === fa.num);
+    if (idx < 0) idx = left.findIndex(t => fa.joker || faceOf(t).joker);
+    if (idx < 0) idx = 0;
+    out.push([a, left.splice(idx, 1)[0]]);
+  }
+  return out;
 }
 function openExtra() {
   if (tableRound() < 2) { log("Taş ekleme ve yeni per üçüncü turda açılır."); return; }
@@ -1812,7 +2029,7 @@ function playerDiscardAmerikan(finish) {
     }
     const result = evaluateHand(rest);
     if (!result.ok) { log("Düz okey eli bitmiyor."); return; }
-    discardTile(0, id);
+    discardTile(0, id, true);
     finishAmerikan(0, result);
     return;
   }
@@ -1820,9 +2037,14 @@ function playerDiscardAmerikan(finish) {
     if (!state.opened[0]) { log("Önce sözleşmeyi açmalısın."); return; }
     if (state.openedAt[0] === state.ply || tableRound() < 2) { log("Bitirmek üçüncü turda olur."); return; }
     if (state.players[0].length !== 1) { log("Bitirmek için elde tek taş kalmalı."); return; }
-    discardTile(0, id);
+    discardTile(0, id, true);
     state.picked = [];
     finishAmerikan(0, null);
+    return;
+  }
+  if (state.players[0].length === 1) {
+    if (state.opened[0] && tableRound() >= 2 && state.openedAt[0] !== state.ply) return playerDiscardAmerikan(true);
+    log("Son taşını atamazsın; bitirebildiğin turda Bitir'e bas.");
     return;
   }
   discardTile(0, id);
@@ -1840,7 +2062,7 @@ function advanceAmerikan(auto) {
     state.amerikanEl = 0;
     state.scores = [0, 0, 0, 0];
   }
-  if (auto) setTimeout(newRound, 1400);
+  if (auto) later(newRound, 1400);
 }
 function finishAmerikan(winner, result) {
   state.phase = "over";
@@ -1852,7 +2074,6 @@ function finishAmerikan(winner, result) {
   const loss = (duz ? (result && result.pairs ? 4 : 2) : 50) * (duz ? 1 : mult);
   state.scores[winner] -= loss;
   const notes = [NAMES[winner] + " −" + loss + (okeyFinish ? " (okey)" : "")];
-  for (let i = 0; i < 4; i++) if (state.feedPen && state.feedPen[i]) notes.push(NAMES[i] + " +" + state.feedPen[i] + " (işleme/joker)");
   for (let i = 0; i < 4; i++) {
     const jokers = state.players[i].filter(t => faceOf(t).joker).length;
     if (jokers) {
@@ -1871,7 +2092,7 @@ function finishAmerikan(winner, result) {
   advanceAmerikan(false);
 }
 function showAmerikanRules() {
-  showModal("Amerikano nasıl oynanır", `
+  showRules("Amerikano nasıl oynanır", `
     <ul>
       <li>11 el sabit sözleşmeyle gider. Başlayan sözleşme seçmez.</li>
       <li>Herkes 14 taş alır. Açık taş, başlayanın solundan atılmış sayılır. Gösterge okey belirlemez.</li>
@@ -1898,10 +2119,32 @@ function tilePoints(tile) {
   return f.joker ? state.okey.num : f.num;
 }
 function groupsPoints(groups) {
-  return groups.flat().reduce((s, t) => s + tilePoints(t), 0);
+  return groups.reduce((s, g) => s + groupValue(g.filter(Boolean)), 0);
+}
+// Value of one per/seri. A joker is worth the tile it stands for (R5 R6 okey = 5+6+7).
+function groupValue(group) {
+  const concretes = group.filter(t => !faceOf(t).joker);
+  const jokers = group.length - concretes.length;
+  if (!concretes.length) return 0;
+  const faces = concretes.map(faceOf);
+  const nums = faces.map(f => f.num).sort((a, b) => a - b);
+  const runValue = () => {
+    // Fill the gaps first, then extend upwards (to 13), then downwards.
+    let lo = nums[0], hi = nums[nums.length - 1];
+    let spare = jokers - ((hi - lo + 1) - nums.length);
+    while (spare > 0 && hi < 13) { hi++; spare--; }
+    while (spare > 0 && lo > 1) { lo--; spare--; }
+    let sum = 0;
+    for (let v = lo; v <= hi; v++) sum += v;
+    return sum;
+  };
+  const sameNum = nums.every(n => n === nums[0]);
+  if (concretes.length === 1) return Math.max(group.length <= 4 ? nums[0] * group.length : 0, runValue());
+  if (sameNum) return nums[0] * group.length;
+  return runValue();
 }
 function show101Rules() {
-  showModal("101 nasıl oynanır", `
+  showRules("101 nasıl oynanır", `
     <ul>
       <li>Aynı 106 taş. Herkes 21 taş alır, başlayan 22 alır ve önce atar.</li>
       <li>Gösterge okeyi belirler. Okey jokerdir. Sahte okey joker değildir.</li>
@@ -1929,6 +2172,7 @@ function takeFromHand(player, ids) {
 }
 function openSelected() {
   if (state.turn !== 0 || state.phase !== "discard" || state.mode === "duz") return;
+  if (mpGuest()) return guestAct("open");
   if (state.mode === "amerikan" && state.opened[0]) return openExtra();
   if (state.opened[0]) return;
   if (state.mode === "amerikan") return openAmerikan();
@@ -2015,18 +2259,29 @@ function addToMeld(index) {
   if (state.turn !== 0 || state.phase !== "discard" || !state.opened[0] || !state.picked.length) return;
   if (state.mode === "amerikan" && tableRound() < 2) { log("İşleme üçüncü turda yapılır."); return; }
   const meld = state.melds[index];
+  if (!meld) return;
+  if (mpGuest()) return guestAct("add", [index]);
   const tiles = state.picked.map(id => tileById(id)).filter(Boolean);
   if (tiles.length === 1 && meld.owner !== 0 && swapJoker(0, tiles[0], meld.tiles)) {
     log("Okeyi gerçek taşınla değiştirdin.");
     render();
     return;
   }
-  for (const tile of tiles) {
-    if (!canExtend(meld.tiles, tile)) { log(describe(tile) + " bu pere eklenmez."); return; }
-    meld.tiles.push(tile);
+  if (tiles.length >= state.players[0].length) { log("Elde atacak en az bir taş kalmalı."); return; }
+  // Try on a copy first, in any order (so R7 and R8 can both go onto R4-5-6).
+  const work = meld.tiles.slice();
+  let rest = tiles.slice();
+  let progress = true;
+  while (rest.length && progress) {
+    progress = false;
+    for (const t of rest.slice()) {
+      if (canExtend(work, t)) { work.push(t); rest = rest.filter(x => x !== t); progress = true; }
+    }
   }
-  sortMeld(meld.tiles);
+  if (rest.length) { log(describe(rest[0]) + " bu pere eklenmez."); return; }
   takeFromHand(0, tiles.map(t => t.id));
+  meld.tiles.splice(0, meld.tiles.length, ...work);
+  sortMeld(meld.tiles);
   state.picked = [];
   state.selected = null;
   log("Taş eklendi.");
@@ -2039,18 +2294,19 @@ function playerDiscard101(finish) {
   if (finish) {
     if (state.opened[0]) {
       if (state.players[0].length !== 1) { log("Bitirmek için elde tek taş kalmalı."); return; }
-      discardTile(0, id);
+      discardTile(0, id, true);
       state.picked = [];
       finish101(0, false);
       return;
     }
     const groups = partition(rest);
     if (!groups || groupsPoints(groups) < 101) { log("Elden bitmiyor. Kalan taşlar en az 101'lik açılış olmalı."); return; }
-    discardTile(0, id);
+    discardTile(0, id, true);
     state.picked = [];
     finish101(0, true);
     return;
   }
+  if (state.players[0].length === 1) return playerDiscard101(true);
   discardTile(0, id);
   state.picked = state.picked.filter(x => x !== id);
   state.selected = null;
@@ -2065,7 +2321,6 @@ function finish101(winner, elden) {
   const award = elden ? -202 : -101;
   state.scores[winner] += award;
   const notes = [];
-  for (let i = 0; i < 4; i++) if (state.feedPen && state.feedPen[i]) notes.push(NAMES[i] + " +" + state.feedPen[i] + " (işleme/joker)");
   for (let i = 0; i < 4; i++) {
     if (i === winner) continue;
     const pen = state.opened[i] ? handPenalty(state.players[i]) : 101;
@@ -2176,10 +2431,10 @@ function ai101Discard(p) {
     const hand = state.players[p];
     for (const t of hand) {
       const r = evaluateHand(hand.filter(x => x.id !== t.id));
-      if (r.ok) { discardTile(p, t.id); finishAmerikan(p, r); return; }
+      if (r.ok) { discardTile(p, t.id, true); finishAmerikan(p, r); return; }
     }
-    discardTile(p, chooseDiscard(p));
-    log(NAMES[p] + " " + describe(state.discard.at(-1)) + " attı.");
+    const dropped = discardTile(p, chooseDiscard(p));
+    if (dropped) log(NAMES[p] + " " + describe(dropped) + " attı" + (state.discards[p].includes(dropped) ? "." : ", taş çifte gitti."));
     nextTurn();
     return;
   }
@@ -2202,11 +2457,19 @@ function ai101Discard(p) {
       log(NAMES[p] + " " + groupsPoints(found) + " ile açtı.");
     }
   } else {
+    let guard = 0;
+    while (state.players[p].length > 1 && guard++ < 6) {
+      const g = pullOneGroup(state.players[p]);
+      if (!g || state.players[p].length - g.length < 1) break;
+      takeFromHand(p, g.map(t => t.id));
+      state.melds.push({ owner: p, tiles: sortMeld(g) });
+    }
     const extra = [];
     state.players[p].slice().forEach(tile => {
       const meld = state.melds.find(m => canExtend(m.tiles, tile));
       if (meld && state.players[p].length - extra.length > 1) {
         meld.tiles.push(tile);
+        sortMeld(meld.tiles);
         extra.push(tile.id);
       }
     });
@@ -2218,14 +2481,14 @@ function ai101Discard(p) {
   }
   const left = state.players[p];
   if (state.opened[p] && left.length === 1) {
-    discardTile(p, left[0].id);
+    discardTile(p, left[0].id, true);
     if (state.mode === "amerikan") finishAmerikan(p, null);
     else finish101(p, false);
     return;
   }
   const discardId = chooseDiscard(p);
-  discardTile(p, discardId);
-  log(NAMES[p] + " " + describe(state.discard.at(-1)) + " attı.");
+  const dropped = discardTile(p, discardId);
+  if (dropped) log(NAMES[p] + " " + describe(dropped) + " attı" + (state.discards[p].includes(dropped) ? "." : ", taş çifte gitti."));
   nextTurn();
 }
 
@@ -2263,7 +2526,7 @@ function aiAmerikanPlay(p) {
   }
   const left = state.players[p];
   if (state.opened[p] && tableRound() >= 2 && left.length === 1) {
-    discardTile(p, left[0].id);
+    discardTile(p, left[0].id, true);
     finishAmerikan(p, null);
     return;
   }
@@ -2272,8 +2535,8 @@ function aiAmerikanPlay(p) {
   const quiet = pool.filter(t => !nextCanLayOff(p, t));
   const pickFrom = quiet.length ? quiet : pool;
   const discardId = pickFrom.slice().sort((a, b) => tilePoints(b) - tilePoints(a))[0].id;
-  discardTile(p, discardId);
-  log(NAMES[p] + " " + describe(state.discard.at(-1)) + " attı.");
+  const dropped = discardTile(p, discardId);
+  if (dropped) log(NAMES[p] + " " + describe(dropped) + " attı" + (state.discards[p].includes(dropped) ? "." : ", taş çifte gitti."));
   nextTurn();
 }
 function aiAmerikanDraw(p) {
@@ -2295,10 +2558,10 @@ function aiAmerikanDraw(p) {
   state.phase = "discard";
   state.drewMandatory = false;
   render();
-  setTimeout(aiTurn, 3000);
+  later(aiTurn, 500);
 }
 function aiTurn() {
-  if (state.phase === "over" || state.turn === 0) return;
+  if (state.mode === "batak" || state.phase === "over" || !isBot(state.turn)) return;
   const p = state.turn;
   if (state.phase === "draw") {
     if (state.mode === "amerikan") return aiAmerikanDraw(p);
@@ -2318,7 +2581,7 @@ function aiTurn() {
     }
     state.phase = "discard";
     render();
-    setTimeout(aiTurn, 3000);
+    later(aiTurn, 500);
     return;
   }
   const hand = state.players[p];
@@ -2340,8 +2603,8 @@ function aiTurn() {
       return;
     }
   }
-  discardTile(p, discardId);
-  log(NAMES[p] + " " + describe(state.discard.at(-1)) + " attı.");
+  const dropped = discardTile(p, discardId);
+  if (dropped) log(NAMES[p] + " " + describe(dropped) + " attı" + (state.discards[p].includes(dropped) ? "." : ", taş çifte gitti."));
   nextTurn();
 }
 
