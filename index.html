@@ -2309,6 +2309,7 @@ function showAmerikanRules() {
       <li>Açılan taşlar küçükten büyüğe dizilir. Bir satır en fazla 13 taştır. Gruplar arasında bir taş boşluk vardır. Sığmayan per veya seri bütün olarak alt satıra iner.</li>
       <li>İlk turda kimse sözleşme açamaz. Sözleşme ikinci turda açılır. İşleme, ek per ve bitiş üçüncü turda olur.</li>
       <li>Sözleşmeyi açmayan, başkasının perine ekleme yapamaz.</li>
+      <li>Açılış yaptığın elde, masada daha önce açılmış taşlara elindeki taşları ekleyemezsin (okey değiştirme de yapılamaz). Ekleme bir sonraki elinden itibaren yapılır.</li>
       <li>Deste bitince el biter. Herkes elindeki taş kadar ceza yer. 1, 10, 11, 12 ve 13 on puandır. Diğer taşlar kendi sayısıdır.</li>
     </ul>
   `);
@@ -2470,6 +2471,8 @@ function swapJoker(player, tile, meld) {
 function addToMeld(index) {
   if (state.turn !== 0 || state.phase !== "discard" || !state.opened[0] || !state.picked.length) return;
   if (state.mode === "amerikan" && tableRound() < 2) { log("İşleme üçüncü turda yapılır."); return; }
+  // Amerikano: açılış yaptığın elde masadaki taşlara ekleme (ve okey değiştirme) yapılamaz.
+  if (state.mode === "amerikan" && state.openedAt[0] === state.ply) { log("Açılış yaptığın elde açılmış taşlara ekleme yapamazsın. Bir sonraki elinden itibaren ekleyebilirsin."); return; }
   const meld = state.melds[index];
   if (!meld) return;
   if (mpGuest()) return guestAct("add", [index]);
