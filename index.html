@@ -118,6 +118,8 @@
   .d2 { left: 10px; top: 10px; }
   .d3 { left: 10px; bottom: 10px; }
   .discard-slot.legal { outline: 2px dashed var(--gold); border-radius: 10px; }
+  .discard-slot.claim { outline: 3px solid #4ade80; border-radius: 10px; box-shadow: 0 0 14px rgba(74,222,128,.9); animation: claimPulse .8s ease-in-out infinite alternate; cursor: pointer; }
+  @keyframes claimPulse { from { box-shadow: 0 0 6px rgba(74,222,128,.6); } to { box-shadow: 0 0 18px rgba(74,222,128,1); } }
   .discard-slot.picked, #indicator.picked { outline: 3px solid var(--gold); box-shadow: 0 0 12px rgba(255,214,90,.8); }
   .middle {
     position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
@@ -544,6 +546,8 @@ function shuffle(a) {
 }
 // Every new hand gets a new "generation". Timers from an old hand are ignored,
 // so pressing "Yeni el" never lets a stale bot move play twice in the new hand.
+// Bots wait this long when their turn starts, so players can follow the tiles (and grab pairs).
+const BOT_WAIT = 2000;
 let gen = 0;
 function later(fn, ms) {
   const g = gen;
@@ -584,6 +588,8 @@ function newRound() {
   if (mpGuest()) { log("Yeni eli masayı açan başlatır."); return; }
   gen++;
   mp.modal = null;
+  state.pairClaims = [0, 0, 0, 0];
+  state.claimable = null;
   document.getElementById("modal").classList.remove("show");
   if (state.mode === "batak") return startBatak();
   state.round++;
@@ -622,7 +628,7 @@ function newRound() {
     rebuildSlots();
     log(NAMES[state.starter] + " başlıyor. Amerikano " + (state.amerikanEl + 1) + "/11: " + contract().name + ". Gösterge alınana kadar durur. İlk başlayan bedava alabilir.");
     render();
-    if (isBot(state.turn)) later(aiTurn, 600);
+    if (isBot(state.turn)) later(aiTurn, BOT_WAIT);
     return;
   }
   const handCount = state.mode === "yuz" ? 21 : 14;
@@ -641,7 +647,7 @@ function newRound() {
   if (gostergeHits.length) msg += " Gösterge cezası: " + gostergeHits.join(", ") + ".";
   log(msg);
   render();
-  if (isBot(state.turn)) later(aiTurn, 600);
+  if (isBot(state.turn)) later(aiTurn, BOT_WAIT);
 }
 function hasGosterge(hand) {
   return hand.some(tile => !tile.fake && tile.color === state.indicator.color && tile.num === state.indicator.num);
@@ -731,7 +737,8 @@ function renderOkey() {
     const legal = state.turn === 0 && state.phase === "draw" && state.discards[i].length && (
       state.mode !== "amerikan" ? i === prev : i !== 0
     );
-    disc.className = "discard-slot d" + i + (legal ? " legal" : "") + (pick.seats.includes(i) ? " picked" : "");
+    const claim = state.claimable && state.claimable.owner === i && claimableFor(0);
+    disc.className = "discard-slot d" + i + (legal ? " legal" : "") + (pick.seats.includes(i) ? " picked" : "") + (claim ? " claim" : "");
     const pile = state.discards[i];
     disc.innerHTML = `<div class="stack-spot"></div>`;
     const spot = disc.querySelector(".stack-spot");
@@ -834,7 +841,7 @@ function renderOkey() {
   document.getElementById("finishBtn").disabled = !(myTurn && state.phase === "discard" && state.selected);
   const openBtn = document.getElementById("openBtn");
   const addBtn = document.getElementById("addBtn");
-  if (openBtn) openBtn.disabled = !(myTurn && state.phase === "discard" && state.mode !== "duz" && state.picked.length >= 3 && !(state.mode === "amerikan" && contract().parts[0][0] === "duz") && (!state.opened[0] || state.mode === "amerikan") && !(state.mode === "amerikan" && !state.opened[0] && tableRound() < 1) && !(state.mode === "amerikan" && state.opened[0] && tableRound() < 2));
+  if (openBtn) openBtn.disabled = !(myTurn && state.phase === "discard" && state.mode !== "duz" && state.picked.length >= (pairContract() && !state.opened[0] ? 2 : 3) && !(state.mode === "amerikan" && contract().parts[0][0] === "duz") && (!state.opened[0] || state.mode === "amerikan") && !(state.mode === "amerikan" && !state.opened[0] && tableRound() < 1) && !(state.mode === "amerikan" && state.opened[0] && tableRound() < 2));
   if (addBtn) addBtn.disabled = !(myTurn && state.phase === "discard" && state.mode !== "duz" && state.opened[0] && state.picked.length);
   document.body.classList.toggle("mode-101", state.mode !== "duz");
   document.body.classList.toggle("duz-hand", state.mode === "amerikan" && contract().parts[0][0] === "duz");
@@ -939,18 +946,52 @@ function afterAmerikanDiscard(player, tile) {
       log(NAMES[player] + (faceOf(tile).joker ? " joker attı" : " işlenebilecek taş attı") + ": +50.");
     }
   }
-  if (state.mode !== "amerikan" || !pairContract() || faceOf(tile).joker) return;
+}
+// ---------- Çift kapma (yalnız çift ellerinde) ----------
+// Atılan son taş, elindeki bir taşın aynısıysa (aynı renk, aynı sayı), sıra sende olmasa bile
+// bir sonraki oyuncu almadan önce dokunan alır. İki taş hemen çift olarak açılır ve
+// o oyuncunun sözleşmesinde gereken çift sayısı bir azalır.
+function pairClaimsOf(p) { return (state.pairClaims || [])[p] || 0; }
+function contractPartsFor(p) {
+  return contract().parts.map(([kind, n]) => kind === "pairs" ? [kind, Math.max(0, n - pairClaimsOf(p))] : [kind, n]);
+}
+function claimableFor(q) {
+  const c = state.claimable;
+  if (!c || !pairContract() || state.phase === "over" || c.owner === q || state.opened[q]) return null;
+  const tile = (state.discards[c.owner] || []).at(-1);
+  if (!tile || tile.id !== c.id) return null;
   const f = faceOf(tile);
-  for (let step = 1; step <= 3; step++) {
-    const who = (player + step) % 4;
-    const matches = state.players[who].filter(t => !faceOf(t).joker && faceOf(t).color === f.color && faceOf(t).num === f.num);
-    if (matches.length === 1) {
-      state.discards[player].pop();
-      state.players[who].push(tile);
-      if (who === 0) placeOnRack(tile);
-      log(describe(tile) + " " + NAMES[who] + " oyuncusunun çiftine gitti.");
-      return;
-    }
+  if (f.joker || state.players[q].length < 2) return null;
+  const match = state.players[q].find(t => { const g = faceOf(t); return !g.joker && g.color === f.color && g.num === f.num; });
+  return match ? { tile, match } : null;
+}
+function claimPair(q, owner) {
+  const c = claimableFor(q);
+  if (!c || state.claimable.owner !== owner) return false;
+  if (q === 0 && mpGuest()) { guestAct("claim", [owner]); return true; }
+  state.discards[owner].pop();
+  takeFromHand(q, [c.match.id]);
+  state.melds.push({ owner: q, tiles: [c.match, c.tile] });
+  state.claimable = null;
+  state.pairClaims = state.pairClaims || [0, 0, 0, 0];
+  state.pairClaims[q]++;
+  const left = contract().parts[0][1] - state.pairClaims[q];
+  if (left <= 0) { state.opened[q] = true; state.openedAt[q] = state.ply; }
+  if (q === 0) {
+    state.picked = state.picked.filter(id => id !== c.match.id);
+    if (state.selected === c.match.id) state.selected = null;
+  }
+  log((q === 0 ? "Çifti kaptın: " : NAMES[q] + " çifti kaptı: ") + describe(c.tile) + ". "
+    + (left <= 0 ? "Sözleşme tamamlandı, tekrar açmaya gerek yok." : "Açmak için kalan çift: " + left + "."));
+  render();
+  return true;
+}
+// Bots react a moment after a discard (so a person has time to grab it first).
+function botClaims() {
+  const c = state.claimable;
+  if (!c) return;
+  for (const q of shuffle([1, 2, 3].filter(q => isBot(q)))) {
+    if (claimableFor(q)) { claimPair(q, c.owner); return; }
   }
 }
 function discardTile(player, id, finishing) {
@@ -966,6 +1007,10 @@ function discardTile(player, id, finishing) {
   }
   // The tile you finish with is never punished as an "işlek taş".
   if (!finishing && (state.mode === "amerikan" || state.mode === "yuz")) afterAmerikanDiscard(player, t);
+  if (!finishing && pairContract() && !faceOf(t).joker) {
+    state.claimable = { owner: player, id: t.id };
+    later(botClaims, 1500 + Math.random() * 1000);
+  } else state.claimable = null;
   return t;
 }
 
@@ -1020,6 +1065,7 @@ function amerikanFinishDraw() {
   render();
 }
 function onDiscardPile(owner) {
+  if (state.claimable && state.claimable.owner === owner && claimableFor(0)) { claimPair(0, owner); return; }
   if (state.turn !== 0 || state.phase !== "draw") return;
   if (state.mode === "amerikan") return amerikanTakeDiscard(owner);
   if (owner !== prevOf(0)) return;
@@ -1098,7 +1144,7 @@ function nextTurn() {
   state.ply = (state.ply || 0) + 1;
   state.phase = "draw";
   state.drawPick = freshPick();
-  if (isBot(state.turn)) later(aiTurn, 700);
+  if (isBot(state.turn)) later(aiTurn, BOT_WAIT);
   else if (state.turn === 0) log("Sıra sende. Desteye ya da soldaki taşa bas.");
   else log((NAMES[state.turn] || "Rakip") + " oynuyor.");
   render();
@@ -1687,7 +1733,7 @@ function mpSeatsChanged() {
   const b = state.batak;
   if (state.mode === "batak" && b && b.phase !== "over") {
     if (isBot(b.turn)) later(aiBatak, 600);
-  } else if (state.phase !== "over" && isBot(state.turn)) later(aiTurn, 600);
+  } else if (state.phase !== "over" && isBot(state.turn)) later(aiTurn, BOT_WAIT);
   render();
 }
 // Turn the whole table so that seat k sits at the bottom (index 0).
@@ -1697,7 +1743,8 @@ function rotateState(k) {
   if (!k) return;
   const rot = (arr) => Array.isArray(arr) && arr.length === 4 ? arr.map((_, i) => arr[(i + k) % 4]) : arr;
   const seat = (s) => (s == null || s < 0) ? s : (s - k + 4) % 4;
-  ["players", "discards", "opened", "scores", "openedAt", "taken"].forEach(f => { if (state[f]) state[f] = rot(state[f]); });
+  ["players", "discards", "opened", "scores", "openedAt", "taken", "pairClaims"].forEach(f => { if (state[f]) state[f] = rot(state[f]); });
+  if (state.claimable) state.claimable = { owner: seat(state.claimable.owner), id: state.claimable.id };
   NAMES = rot(NAMES);
   state.turn = seat(state.turn);
   state.starter = seat(state.starter);
@@ -1713,7 +1760,7 @@ function rotateState(k) {
   }
 }
 function mpSnapshot() {
-  return JSON.parse(JSON.stringify({ scores: state.scores, round: state.round, dealer: state.dealer, players: state.players, wall: state.wall, discards: state.discards, indicator: state.indicator, okey: state.okey, turn: state.turn, phase: state.phase, starter: state.starter, mode: state.mode, amerikanEl: state.amerikanEl, opened: state.opened, openedAt: state.openedAt, melds: state.melds, ply: state.ply, gostergeLive: state.gostergeLive, batak: state.batak, onlineHumans: state.onlineHumans || [], note: state.note || null, modal: mp.modal }));
+  return JSON.parse(JSON.stringify({ scores: state.scores, round: state.round, dealer: state.dealer, players: state.players, wall: state.wall, discards: state.discards, indicator: state.indicator, okey: state.okey, turn: state.turn, phase: state.phase, starter: state.starter, mode: state.mode, amerikanEl: state.amerikanEl, opened: state.opened, openedAt: state.openedAt, melds: state.melds, ply: state.ply, gostergeLive: state.gostergeLive, batak: state.batak, onlineHumans: state.onlineHumans || [], pairClaims: state.pairClaims || [0,0,0,0], claimable: state.claimable || null, note: state.note || null, modal: mp.modal }));
 }
 function mpBroadcast() {
   if (mp.role !== "host" || mp.rot) return;
@@ -1769,7 +1816,8 @@ const GUEST_ACTIONS = {
   discard: (finish) => playerDiscard(!!finish),
   bid: (n) => placeBid(0, n),
   trump: (s) => chooseTrump(s),
-  play: (id) => playBatakCard(0, id)
+  play: (id) => playBatakCard(0, id),
+  claim: (owner) => claimPair(0, owner)
 };
 function mpHostAct(seat, msg) {
   if (!state.started || state.phase === "over" && state.mode !== "batak") return;
@@ -1777,7 +1825,7 @@ function mpHostAct(seat, msg) {
   const fn = GUEST_ACTIONS[msg.act];
   if (!fn) return;
   const turn = state.mode === "batak" && state.batak ? state.batak.turn : state.turn;
-  if (turn !== seat) return;
+  if (turn !== seat && msg.act !== "claim") return;
   const saved = { slots: state.slots, picked: state.picked, selected: state.selected, drawPick: state.drawPick };
   rotateState(seat);
   mp.rot = seat;
@@ -1799,7 +1847,8 @@ function mpHostAct(seat, msg) {
     state.drawPick = state.turn === 0 && state.phase === "draw" ? saved.drawPick : freshPick();
   }
   state.note = { seat, text: mp.note, n: ++mp.noteSeq };
-  if (state.turn === 0 && state.phase !== "over") log(state.mode === "batak" ? "Sıra sende." : "Sıra sende. Desteye ya da soldaki taşa bas.");
+  if (msg.act === "claim") log((NAMES[seat] || "Oyuncu") + " çifti kaptı.");
+  else if (state.turn === 0 && state.phase !== "over") log(state.mode === "batak" ? "Sıra sende." : "Sıra sende. Desteye ya da soldaki taşa bas.");
   else if (state.phase !== "over") log((NAMES[seat] || "Oyuncu") + " oynadı.");
   render();
 }
@@ -2100,7 +2149,7 @@ function isExactPairs(tiles, count) {
   return singles <= jokers;
 }
 function matchContract(tiles) {
-  const parts = contract().parts;
+  const parts = contractPartsFor(0);
   if (parts[0][0] === "duz") return null;
   const total = parts.reduce((n, [kind, k]) => n + (kind === "pairs" ? k * 2 : k), 0);
   if (tiles.length !== total) return null;
@@ -2180,8 +2229,8 @@ function playerDiscardAmerikan(finish) {
       nextTurn();
       return;
     }
-    const result = evaluateHand(rest);
-    if (!result.ok) { log("Düz okey eli bitmiyor."); return; }
+    const result = evaluateAmerikanDuz(rest);
+    if (!result.ok) { log("El bitmiyor: atacağın taş dışındaki bütün taşlar seri veya per olmalı."); return; }
     discardTile(0, id, true);
     finishAmerikan(0, result);
     return;
@@ -2248,13 +2297,15 @@ function showAmerikanRules() {
   showRules("Amerikano nasıl oynanır", `
     <ul>
       <li>11 el sabit sözleşmeyle gider. Başlayan sözleşme seçmez.</li>
+      <li>Son el (11. el) düz okeydir: ön şart açılışı yoktur. Bitirmek için atacağın taş dışında elindeki bütün taşlar — kaç taş olursa olsun — seri veya per olarak dizilebilmelidir. Çift sayılmaz.</li>
       <li>Herkes 14 taş alır. Açık taş, başlayanın solundan atılmış sayılır. Gösterge okey belirlemez.</li>
       <li>Joker yalnız sahte okeydir ve her taşın yerine geçer.</li>
       <li>Soldan ya da ortadan almak zorunlu. Sağın ve karşının son atığını, önceki oyuncular almadıysa, alabilirsin. Her biri için desteden bir ceza taşı daha gelir.</li>
       <li>Gösterge alınana kadar durur. Almak diğer çekişleri engellemez. Yalnız ilk başlayan ilk elde bedava alır. Diğer herkes ceza taşı çeker.</li>
       <li>İşlenebilecek taşı atmak +50. Botlar bunu atmamaya çalışır.</li>
       <li>Normal bitiş −50. Okeyle bitişte ödül ve cezalar ikiye katlanır. Çift sözleşmesinde de ikiye katlanır.</li>
-      <li>Çift elinde sözleşmeden sonra yalnız per ve seri açılır, çift açılmaz. Atılan taş birinin çiftiyse otomatik ona gider.</li>
+      <li>Çift elinde sözleşmeden sonra yalnız per ve seri açılır, çift açılmaz.</li>
+      <li>Çift kapma (yalnız çift ellerinde): Atılan taş, elindeki bir taşın aynısıysa (aynı renk, aynı sayı), sıra sende olmasa bile bir sonraki oyuncu almadan önce o taşa dokunursan alırsın. İki taş hemen çift olarak açılır ve senin için gereken çift sayısı bir azalır. Örneğin 3 çift elinde bir kez kaptıysan Aç ile 2 çift, iki kez kaptıysan 1 çift açman yeter; üç kez kaptıysan sözleşmen tamamlanmış olur. Kapılabilecek taş yeşil yanar.</li>
       <li>Açılan taşlar küçükten büyüğe dizilir. Bir satır en fazla 13 taştır. Gruplar arasında bir taş boşluk vardır. Sığmayan per veya seri bütün olarak alt satıra iner.</li>
       <li>İlk turda kimse sözleşme açamaz. Sözleşme ikinci turda açılır. İşleme, ek per ve bitiş üçüncü turda olur.</li>
       <li>Sözleşmeyi açmayan, başkasının perine ekleme yapamaz.</li>
@@ -2528,8 +2579,8 @@ function pullOneGroup(tiles) {
   }
   return null;
 }
-function findContractGroups(hand) {
-  const parts = contract().parts;
+function findContractGroups(hand, p) {
+  const parts = contractPartsFor(p || 0);
   if (parts[0][0] === "duz") return null;
   function candidates(kind, n, pool) {
     const out = [];
@@ -2591,7 +2642,7 @@ function ai101Discard(p) {
   if (state.mode === "amerikan" && contract().parts[0][0] === "duz") {
     const hand = state.players[p];
     for (const t of hand) {
-      const r = evaluateHand(hand.filter(x => x.id !== t.id));
+      const r = evaluateAmerikanDuz(hand.filter(x => x.id !== t.id));
       if (r.ok) { discardTile(p, t.id, true); finishAmerikan(p, r); return; }
     }
     const dropped = discardTile(p, chooseDiscard(p));
@@ -2805,10 +2856,10 @@ function aiAmerikanPlay(p) {
     if (tableRound() < 1) {
       /* ilk turda sözleşme açılmaz */
     } else {
-    const groups = findContractGroups(hand);
+    const groups = findContractGroups(hand, p);
     if (groups && hand.length - groups.flat().length >= 1) {
       takeFromHand(p, groups.flat().map(t => t.id));
-      const parts = contract().parts;
+      const parts = contractPartsFor(p);
       groups.forEach((g, gi) => {
         if (parts[gi] && parts[gi][0] === "pairs") pairUp(g).forEach(pair => state.melds.push({ owner: p, tiles: sortMeld(pair) }));
         else state.melds.push({ owner: p, tiles: sortMeld(g) });
@@ -2947,7 +2998,7 @@ function wantsDiscard(player, tile) {
   if (f.joker) return true;
   if (state.opened[player] && canAddSomewhere(tile)) return true;
   if (handUsefulness(hand.concat([tile]), tile) >= 8) return true;
-  if (state.mode === "amerikan" && !state.opened[player] && tableRound() >= 1) return !!findContractGroups(hand.concat([tile]));
+  if (state.mode === "amerikan" && !state.opened[player] && tableRound() >= 1) return !!findContractGroups(hand.concat([tile]), player);
   return false;
 }
 function sameLine(a, b) {
@@ -2980,6 +3031,14 @@ function chooseDiscard(player) {
   return (safe[0] || careful[0] || ranked[0]).id;
 }
 
+// Amerikano son el ("Düz okey eli"): ön şart / açılış yok. Bitirmek için atılan taş dışında
+// eldeki BÜTÜN taşlar (kaç tane olursa olsun) seri veya per olarak dizilebilmeli. Çift kabul edilmez.
+function evaluateAmerikanDuz(tiles) {
+  if (tiles.length < 3) return { ok: false, reason: "En az 3 taş kalmalı." };
+  const groups = partition(tiles);
+  if (groups) return { ok: true, pairs: false, groups };
+  return { ok: false, reason: "Kalan taşların hepsi seri veya per olmuyor." };
+}
 function evaluateHand(tiles) {
   if (tiles.length !== 14) return { ok: false, reason: "Attıktan sonra 14 taş kalmalı." };
   const pairs = sevenPairs(tiles);
