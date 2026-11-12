@@ -2645,8 +2645,8 @@ function ai101Discard(p) {
       const r = evaluateAmerikanDuz(hand.filter(x => x.id !== t.id));
       if (r.ok) { discardTile(p, t.id, true); finishAmerikan(p, r); return; }
     }
-    const dropped = discardTile(p, chooseDiscard(p));
-    if (dropped) log(NAMES[p] + " " + describe(dropped) + " attı" + (state.discards[p].includes(dropped) ? "." : ", taş çifte gitti."));
+    const dropped = discardTile(p, amerikanDiscardChoice(p));
+    if (dropped) log(NAMES[p] + " " + describe(dropped) + " attı.");
     nextTurn();
     return;
   }
@@ -2850,69 +2850,61 @@ function wants101(player, tile) {
   return after - before >= Math.max(f.num, 1) && after > before;
 }
 
-function aiAmerikanPlay(p) {
+// ---------- Amerikano bot ----------
+// How much a bot wants to keep a tile. Before opening it aims at its own contract
+// (pairs → duplicates, per → same number, seri → neighbours). After opening (or in the
+// last hand) only per/seri matter, so pairs are no longer worth keeping.
+function amerikanKeep(p, tile, hand) {
+  const f = faceOf(tile);
+  if (f.joker) return 1000;
+  const others = hand.filter(t => t.id !== tile.id && !faceOf(t).joker).map(faceOf);
+  const dup = others.some(x => x.color === f.color && x.num === f.num);
+  const sameNum = new Set(others.filter(x => x.num === f.num && x.color !== f.color).map(x => x.color)).size;
+  const near1 = new Set(others.filter(x => x.color === f.color && Math.abs(x.num - f.num) === 1).map(x => x.num)).size;
+  const near2 = new Set(others.filter(x => x.color === f.color && Math.abs(x.num - f.num) === 2).map(x => x.num)).size;
+  const kinds = contractPartsFor(p).filter(x => x[1] > 0).map(x => x[0]);
+  const aimingContract = !state.opened[p] && !kinds.includes("duz");
+  let k = 0;
+  if (aimingContract) {
+    if (kinds.includes("pairs")) k += dup ? 60 : 0;
+    if (kinds.includes("set")) k += sameNum * 22;
+    if (kinds.includes("run")) k += near1 * 20 + near2 * 8;
+    k += sameNum * 4 + near1 * 4;          // useful later for extra per/seri
+  } else {
+    k += sameNum * 14 + near1 * 14 + near2 * 5;
+  }
+  // Points left in hand are paid as penalty when the deck runs out.
+  k -= tilePoints(tile) * (aimingContract ? 0.6 : 1.5);
+  return k;
+}
+function amerikanMeldCount(tiles) {
+  return bestMelds(tiles, 15000).groups.reduce((n, g) => n + g.length, 0);
+}
+// Is this tile worth taking instead of a blind draw? `costly` = taking it also costs a penalty tile.
+function amerikanWants(p, tile, costly) {
   const hand = state.players[p];
-  if (!state.opened[p]) {
-    if (tableRound() < 1) {
-      /* ilk turda sözleşme açılmaz */
-    } else {
-    const groups = findContractGroups(hand, p);
-    if (groups && hand.length - groups.flat().length >= 1) {
-      takeFromHand(p, groups.flat().map(t => t.id));
-      const parts = contractPartsFor(p);
-      groups.forEach((g, gi) => {
-        if (parts[gi] && parts[gi][0] === "pairs") pairUp(g).forEach(pair => state.melds.push({ owner: p, tiles: sortMeld(pair) }));
-        else state.melds.push({ owner: p, tiles: sortMeld(g) });
-      });
-      state.opened[p] = true;
-      state.openedAt[p] = state.ply;
-      log(NAMES[p] + " " + contract().name + " açtı.");
-    }
-    }
-  } else if (tableRound() >= 2) {
-    let guard = 0;
-    while (state.players[p].length > 1 && guard++ < 4) {
-      const g = pullOneGroup(state.players[p]);
-      if (!g || state.players[p].length - g.length < 1) break;
-      if (pairContract() && g.length === 2) break;
-      takeFromHand(p, g.map(t => t.id));
-      state.melds.push({ owner: p, tiles: sortMeld(g) });
-    }
-    const extra = [];
-    state.players[p].slice().forEach(tile => {
-      if (state.players[p].length - extra.length <= 1) return;
-      const meld = state.melds.find(m => canExtend(m.tiles, tile));
-      if (meld) { meld.tiles.push(tile); sortMeld(meld.tiles); extra.push(tile.id); }
-    });
-    if (extra.length) takeFromHand(p, extra);
-  }
-  const left = state.players[p];
-  if (state.opened[p] && tableRound() >= 2 && left.length === 1) {
-    discardTile(p, left[0].id, true);
-    finishAmerikan(p, null);
-    return;
-  }
-  const safe = left.filter(t => !canAddSomewhere(t) && !(pairContract() && state.players.some((h, i) => i !== p && h.filter(x => !faceOf(x).joker && faceOf(x).color === faceOf(t).color && faceOf(x).num === faceOf(t).num).length === 1)));
-  const pool = safe.length ? safe : left;
-  const quiet = pool.filter(t => !nextCanLayOff(p, t));
-  const pickFrom = quiet.length ? quiet : pool;
-  const discardId = pickFrom.slice().sort((a, b) => tilePoints(b) - tilePoints(a))[0].id;
-  const dropped = discardTile(p, discardId);
-  if (dropped) log(NAMES[p] + " " + describe(dropped) + " attı" + (state.discards[p].includes(dropped) ? "." : ", taş çifte gitti."));
-  nextTurn();
+  const f = faceOf(tile);
+  const duz = contract().parts[0][0] === "duz";
+  const canOpenNow = !state.opened[p] && !duz && tableRound() >= 1;
+  const completes = canOpenNow && !findContractGroups(hand, p) && !!findContractGroups(hand.concat([tile]), p);
+  if (costly) return completes;                       // pay a penalty tile only to open the contract right now
+  if (f.joker || completes) return true;
+  if (state.opened[p] && tableRound() >= 2 && canAddSomewhere(tile)) return true;
+  if (state.opened[p] || duz) return amerikanMeldCount(hand.concat([tile])) > amerikanMeldCount(hand);
+  return amerikanKeep(p, tile, hand.concat([tile])) >= 30;
 }
 function aiAmerikanDraw(p) {
   if (state.gostergeLive && state.indicator) {
     const free = p === state.starter && state.ply === 0;
-    if ((free || state.wall.length) && (faceOf(state.indicator).joker || wantsDiscard(p, state.indicator) || free)) takeGosterge(p);
+    if ((free || state.wall.length) && (free || amerikanWants(p, state.indicator, true))) takeGosterge(p);
   }
   const left = state.discards[prevOf(p)].at(-1);
-  if (left && wantsDiscard(p, left)) takeFromPile(p, prevOf(p));
+  if (left && amerikanWants(p, left, false)) takeFromPile(p, prevOf(p));
   else if (state.wall.length) drawFromWall(p);
   else { endEmpty(); return; }
   for (const seat of [(p + 1) % 4, (p + 2) % 4]) {
     const top = state.discards[seat].at(-1);
-    if (top && wantsDiscard(p, top) && state.wall.length && tilePoints(top) >= 5) {
+    if (top && state.wall.length && amerikanWants(p, top, true)) {
       takeFromPile(p, seat);
       drawFromWall(p);
     }
@@ -2921,6 +2913,69 @@ function aiAmerikanDraw(p) {
   state.drewMandatory = false;
   render();
   later(aiTurn, 500);
+}
+function amerikanDiscardChoice(p) {
+  const hand = state.players[p];
+  const opened = state.opened[p] || contract().parts[0][0] === "duz";
+  const inGroups = new Set(opened ? bestMelds(hand, 30000).groups.flat().map(t => t.id) : []);
+  const score = (t) => amerikanKeep(p, t, hand) + (inGroups.has(t.id) ? 100 : 0)
+    + (canAddSomewhere(t) ? 300 : 0)            // +50 ceza
+    + (nextCanLayOff(p, t) ? 80 : 0);           // don't feed the next player
+  const pool = hand.filter(t => !faceOf(t).joker);
+  return (pool.length ? pool : hand).slice().sort((a, b) => score(a) - score(b))[0].id;
+}
+function aiAmerikanPlay(p) {
+  const hand = state.players[p];
+  if (!state.opened[p]) {
+    if (tableRound() >= 1) {
+      const groups = findContractGroups(hand, p);
+      if (groups && hand.length - groups.flat().length >= 1) {
+        takeFromHand(p, groups.flat().map(t => t.id));
+        const parts = contractPartsFor(p);
+        groups.forEach((g, gi) => {
+          if (parts[gi] && parts[gi][0] === "pairs") pairUp(g).forEach(pair => state.melds.push({ owner: p, tiles: sortMeld(pair) }));
+          else state.melds.push({ owner: p, tiles: sortMeld(g) });
+        });
+        state.opened[p] = true;
+        state.openedAt[p] = state.ply;
+        log(NAMES[p] + " " + contract().name + " açtı.");
+      }
+    }
+  } else if (tableRound() >= 2) {
+    // Take okeys back from other players' groups with real tiles.
+    state.players[p].slice().forEach(tile => {
+      if (faceOf(tile).joker || state.players[p].length <= 1) return;
+      const meld = state.melds.find(m => m.owner !== p && jokerStandIns(m.tiles).some(s => s.color === faceOf(tile).color && s.num === faceOf(tile).num));
+      if (meld) swapJoker(p, tile, meld.tiles);
+    });
+    // Lay down every per/seri (never pairs after the contract), keeping one tile to discard.
+    const res = bestMelds(state.players[p]);
+    if (res.groups.length) layGroups(p, keepOneTile(res).groups);
+    // Add single tiles to groups on the table.
+    let changed = true;
+    while (changed && state.players[p].length > 1) {
+      changed = false;
+      for (const tile of state.players[p].slice()) {
+        if (state.players[p].length <= 1) break;
+        if (faceOf(tile).joker && state.players[p].length > 2) continue;
+        const meld = state.melds.find(m => canExtend(m.tiles, tile));
+        if (!meld) continue;
+        meld.tiles.push(tile);
+        sortMeld(meld.tiles);
+        takeFromHand(p, [tile.id]);
+        changed = true;
+      }
+    }
+  }
+  const left = state.players[p];
+  if (state.opened[p] && tableRound() >= 2 && left.length === 1 && state.openedAt[p] !== state.ply) {
+    discardTile(p, left[0].id, true);
+    finishAmerikan(p, null);
+    return;
+  }
+  const dropped = discardTile(p, amerikanDiscardChoice(p));
+  if (dropped) log(NAMES[p] + " " + describe(dropped) + " attı.");
+  nextTurn();
 }
 function aiTurn() {
   if (state.mode === "batak" || state.phase === "over" || !isBot(state.turn)) return;
@@ -2993,6 +3048,7 @@ function nextCanLayOff(player, tile) {
 }
 function wantsDiscard(player, tile) {
   if (state.mode === "yuz") return wants101(player, tile);
+  if (state.mode === "amerikan") return amerikanWants(player, tile, false);
   const hand = state.players[player];
   const f = faceOf(tile);
   if (f.joker) return true;
