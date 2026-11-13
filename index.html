@@ -547,7 +547,7 @@ function shuffle(a) {
 // Every new hand gets a new "generation". Timers from an old hand are ignored,
 // so pressing "Yeni el" never lets a stale bot move play twice in the new hand.
 // Bots wait this long when their turn starts, so players can follow the tiles (and grab pairs).
-const BOT_WAIT = 2000;
+const BOT_WAIT = 3000;
 let gen = 0;
 function later(fn, ms) {
   const g = gen;
@@ -624,7 +624,9 @@ function newRound() {
     state.turn = state.starter;
     state.phase = "draw";
     // Kural: açık taş, başlayanın solundan atılmış sayılır.
-    state.discards[prevOf(state.starter)].push(state.wall.pop());
+    const openTile = state.wall.pop();
+    openTile.discardPly = -1;
+    state.discards[prevOf(state.starter)].push(openTile);
     rebuildSlots();
     log(NAMES[state.starter] + " başlıyor. Amerikano " + (state.amerikanEl + 1) + "/11: " + contract().name + ". Gösterge alınana kadar durur. İlk başlayan bedava alabilir.");
     render();
@@ -735,7 +737,7 @@ function renderOkey() {
     const disc = document.getElementById("disc" + i);
     const pick = state.drawPick || freshPick();
     const legal = state.turn === 0 && state.phase === "draw" && state.discards[i].length && (
-      state.mode !== "amerikan" ? i === prev : i !== 0
+      state.mode !== "amerikan" ? i === prev : (i !== 0 && !!takeableTop(i))
     );
     const claim = state.claimable && state.claimable.owner === i && claimableFor(0);
     disc.className = "discard-slot d" + i + (legal ? " legal" : "") + (pick.seats.includes(i) ? " picked" : "") + (claim ? " claim" : "");
@@ -999,6 +1001,7 @@ function discardTile(player, id, finishing) {
   const idx = hand.findIndex(t => t.id === id);
   if (idx < 0) return null;
   const [t] = hand.splice(idx, 1);
+  t.discardPly = state.ply;
   state.discards[player].push(t);
   state.discard = state.discards[player];
   if (player === 0) {
@@ -1041,6 +1044,7 @@ function amerikanFinishDraw() {
   const left = prevOf(0);
   const hasLeft = pick.seats.includes(left);
   if (pick.wall === hasLeft) { log("Soldan ya da ortadan birini seç."); return; }
+  if (pick.seats.some(s => !takeableTop(s))) { log("Seçtiğin taşlardan biri önceki turda atılmış, alınamaz."); return; }
   if (mpGuest()) return guestAct("finishDraw");
   const extras = pick.seats.filter(s => (s === 1 || s === 2) && state.discards[s].length);
   const freeG = pick.gosterge && state.starter === 0 && state.ply === 0;
@@ -1096,8 +1100,17 @@ function takeGosterge(player) {
   log(NAMES[player] + " göstergeyi aldı" + (free ? "." : " ve ceza taşı çekti."));
   render();
 }
+// Amerikano: yalnız son turda atılmış taşlar alınabilir (soldaki, karşıdaki ve sağdaki oyuncunun
+// senin bir önceki sırandan beri attığı taşlar). Önceki turlardan kalan taşlar alınamaz.
+function takeableTop(owner) {
+  const t = (state.discards[owner] || []).at(-1);
+  if (!t) return null;
+  if (state.mode === "amerikan" && (t.discardPly == null ? -99 : t.discardPly) < (state.ply || 0) - 3) return null;
+  return t;
+}
 function amerikanTakeDiscard(owner) {
   if (!state.discards[owner].length || owner === 0) return;
+  if (!takeableTop(owner) && !ensureDrawPick().seats.includes(owner)) { log("Bu taş önceki turlarda atıldı, alınamaz. Yalnız son turda atılan taşlar alınabilir."); return; }
   const pick = ensureDrawPick();
   const i = pick.seats.indexOf(owner);
   if (i >= 0) pick.seats.splice(i, 1);
@@ -2309,6 +2322,7 @@ function showAmerikanRules() {
       <li>Açılan taşlar küçükten büyüğe dizilir. Bir satır en fazla 13 taştır. Gruplar arasında bir taş boşluk vardır. Sığmayan per veya seri bütün olarak alt satıra iner.</li>
       <li>İlk turda kimse sözleşme açamaz. Sözleşme ikinci turda açılır. İşleme, ek per ve bitiş üçüncü turda olur.</li>
       <li>Sözleşmeyi açmayan, başkasının perine ekleme yapamaz.</li>
+      <li>Yerden yalnız son turda atılmış taşlar alınabilir. Önceki turlarda atılıp kimsenin almadığı taşlar alınamaz.</li>
       <li>Açılış yaptığın elde, masada daha önce açılmış taşlara elindeki taşları ekleyemezsin (okey değiştirme de yapılamaz). Ekleme bir sonraki elinden itibaren yapılır.</li>
       <li>Deste bitince el biter. Herkes elindeki taş kadar ceza yer. 1, 10, 11, 12 ve 13 on puandır. Diğer taşlar kendi sayısıdır.</li>
     </ul>
@@ -2901,12 +2915,12 @@ function aiAmerikanDraw(p) {
     const free = p === state.starter && state.ply === 0;
     if ((free || state.wall.length) && (free || amerikanWants(p, state.indicator, true))) takeGosterge(p);
   }
-  const left = state.discards[prevOf(p)].at(-1);
+  const left = takeableTop(prevOf(p));
   if (left && amerikanWants(p, left, false)) takeFromPile(p, prevOf(p));
   else if (state.wall.length) drawFromWall(p);
   else { endEmpty(); return; }
   for (const seat of [(p + 1) % 4, (p + 2) % 4]) {
-    const top = state.discards[seat].at(-1);
+    const top = takeableTop(seat);
     if (top && state.wall.length && amerikanWants(p, top, true)) {
       takeFromPile(p, seat);
       drawFromWall(p);
